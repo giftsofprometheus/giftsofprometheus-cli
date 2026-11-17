@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+- Skill: use only the CLI and never call the site's API directly; the service now answers other clients with 403 `cli_required`. Without `npx`, run the CLI with `pnpm dlx` or `bunx`; if nothing runs, ask the user to install it and stop.
+- Skill: on `cli_required`, run the command through the CLI. The CLI always sends its User-Agent, so it never gets this code itself.
+
 ## 0.6.0
 
 - Errors carry the service's stable `code` and its `nextStep` when it sends them: `{"error":{"message","status","code","nextStep"}}` with `--json`, and a `Next:` line on stderr without it. On 401 `nextStep` stays the CLI's own sign-in steps. Service messages are now in Russian, so decide by `code`, not by the text.
