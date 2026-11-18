@@ -1,14 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "giftsofprometheus",
-  "description": "AI conference talks and transcripts for AI agents",
+  "description": "World AI knowledge in Russian for AI agents: talks, transcripts and production best practices",
   "owner": {
     "name": "Timur Khakhalev"
   },
   "plugins": [
     {
       "name": "giftsofprometheus",
-      "description": "Find AI conference talks with Russian summaries, read transcripts and manage favorites through the giftsofprometheus CLI",
+      "description": "Find AI engineering talks with Russian summaries, read transcripts and manage favorites through the giftsofprometheus CLI",
       "source": "./",
       "strict": false,
       "skills": ["./skills/giftsofprometheus"],

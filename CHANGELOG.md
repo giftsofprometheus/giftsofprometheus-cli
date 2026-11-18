@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3
+
+- Package, skill and plugin descriptions follow the site's wording: world AI knowledge in Russian for you and your agent; conference names left the descriptions. More npm keywords: `ai-agents`, `agent-skills`, `ai-engineering`, `cursor`, `evals`, `llm`, `mcp`, `rag`, `russian`.
+- README: the new wording, no talk count, links to articles and the event calendar, four more conferences in «Что есть в каталоге».
+
 ## 0.7.2
 
 - The repository moved to the `giftsofprometheus` organization: https://github.com/giftsofprometheus/giftsofprometheus-cli. Links in the package, README and skill point there; the old URL redirects.
