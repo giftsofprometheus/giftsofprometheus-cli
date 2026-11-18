@@ -12,13 +12,13 @@
     "skill",
     "transcripts"
   ],
-  "homepage": "https://github.com/timurkhakhalev/giftsofprometheus-cli#readme",
-  "bugs": "https://github.com/timurkhakhalev/giftsofprometheus-cli/issues",
+  "homepage": "https://github.com/giftsofprometheus/giftsofprometheus-cli#readme",
+  "bugs": "https://github.com/giftsofprometheus/giftsofprometheus-cli/issues",
   "license": "Apache-2.0",
   "author": "Timur Khakhalev",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/timurkhakhalev/giftsofprometheus-cli.git"
+    "url": "git+https://github.com/giftsofprometheus/giftsofprometheus-cli.git"
   },
   "bin": {
     "giftsofprometheus": "dist/index.js"
