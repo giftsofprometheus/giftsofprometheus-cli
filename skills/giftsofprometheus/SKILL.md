@@ -39,14 +39,19 @@ giftsofprometheus --json talks search 'agent evaluation'   # published talks by 
 giftsofprometheus --json talks list --page 2               # the whole catalog, page by page
 giftsofprometheus --json talks get <slug-or-id>            # one talk: summary, speakers, topics, publication
 giftsofprometheus --json talks content <slug-or-id>        # full transcript, requires login
+giftsofprometheus --json talks content <slug> --outline    # speakers and chapters, no transcript
+giftsofprometheus --json talks content <slug> --from 12:30 --to 18:00   # one stretch of the transcript
 giftsofprometheus --json talks similar <slug-or-id>        # up to four similar talks with a reason each
 giftsofprometheus --json feed                              # personal recommendations, requires login
 giftsofprometheus --json favorites list                    # saved talks, requires login
 giftsofprometheus --json profile get                       # interests and current task, requires login
 ```
 
-- For questions about what speakers say, use `ask` with 2–3 formulations: English, Chinese and the original language. For names, titles, topics and conferences use `talks search`.
-- Open a found transcript with `talks content <slug> --rec-id <recId>` from the `ask` response. Summarize positions of different speakers and give the passage `url` links with timecodes.
+- For questions about what speakers say, use `ask`. It takes at most three formulations in total: the query and up to two `--q`, for example English, Chinese and the user's language. For names, titles, topics and conferences use `talks search`.
+- Open a found transcript with `talks content <slug> --rec-id <recId>` from the `ask` response. To read around a passage, take `--outline` for the chapters, then `--from`/`--to` for the stretch you need instead of the whole transcript. Summarize positions of different speakers and give links with timecodes.
+- A link to a moment is the talk `url` with `t` set to the second where the cited words start in the transcript segment, not the start of the `ask` passage. Keep the `recId` in every link.
+- Each speaker has `organization` and `jobTitle` (`null` when unknown). Name a person's company only from these fields, never guess it. In a talk with several speakers, attribute a claim to a person only when the transcript makes clear who says it; otherwise attribute it to the talk. A company named in a title or a summary may be a customer or the subject of the talk, not the speaker's employer.
+- For "how does the industry do X" questions, separate companies that describe their own production practice from vendors presenting their product (the speaker works at the company that sells the tool). Lead with the first; say plainly when the evidence is mostly vendor talks.
 - If `ask` fails with code `passages_unavailable`, use `talks search`.
 - Lists are paginated: check `totalPages` and pass `--page`.
 - Search and use the returned `slug` or `id` for exact reads.
