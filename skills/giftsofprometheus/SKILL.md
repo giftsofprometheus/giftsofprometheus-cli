@@ -51,7 +51,11 @@ giftsofprometheus --json profile get                       # interests and curre
 - Open a found transcript with `talks content <slug> --rec-id <recId>` from the `ask` response. To read around a passage, take `--outline` for the chapters, then `--from`/`--to` for the stretch you need instead of the whole transcript. Summarize positions of different speakers and give links with timecodes.
 - A link to a moment is the talk `url` with `t` set to the second where the cited words start in the transcript segment, not the start of the `ask` passage. Keep the `recId` in every link.
 - Each speaker has `organization` and `jobTitle` (`null` when unknown). Name a person's company only from these fields, never guess it. In a talk with several speakers, attribute a claim to a person only when the transcript makes clear who says it; otherwise attribute it to the talk. A company named in a title or a summary may be a customer or the subject of the talk, not the speaker's employer.
-- For "how does the industry do X" questions, separate companies that describe their own production practice from vendors presenting their product (the speaker works at the company that sells the tool). Lead with the first; say plainly when the evidence is mostly vendor talks.
+- Practice questions ("how to review / roll out / test / organize X", "how does the industry do X") are answered with how teams that run X in production do it, not with your own recipe:
+  - Queries for `ask` (the query and up to two `--q`): the core of the question in English; a first-person wording the way practitioners speak, such as `how we <do X> in production at our company`; lessons and failures, such as `lessons learned rolling out <X>`.
+  - Lead with companies that describe their own production practice; mark vendors presenting their product (the speaker works at the company that sells the tool) as vendors. Say plainly when the evidence is mostly vendor talks.
+  - Structure the answer by company: what they did, how it works, numbers from the talk, a link to the moment. End with a couple of lines on what they have in common, without "the right way" in your own voice.
+  - Do not apply this to "how to install / run / configure a specific tool", "what is X", or a search for a particular talk or speaker.
 - If `ask` fails with code `passages_unavailable`, use `talks search`.
 - Lists are paginated: check `totalPages` and pass `--page`.
 - Search and use the returned `slug` or `id` for exact reads.
