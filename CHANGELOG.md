@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.2
+
+- The repository moved to the `giftsofprometheus` organization: https://github.com/giftsofprometheus/giftsofprometheus-cli. Links in the package, README and skill point there; the old URL redirects.
+
 ## 0.7.1
 
 - Skill: practice questions ("how to review AI code", "how to do evals") are answered with how teams running it in production do it. The agent builds `ask` queries in practitioners' first-person wording ("how we … in production at our company", "lessons learned rolling out …"), structures the answer by company, marks vendors and gives no recipe of its own. On neutral questions this raised the share of companies' own production talks among cited sources from 24% to 43% in an evaluation on 10 topics.

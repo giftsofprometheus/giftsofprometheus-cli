@@ -11,8 +11,8 @@
 <p>
   <a href="https://giftsofprometheus.com/?utm_source=github&amp;utm_medium=readme&amp;utm_campaign=cli"><img alt="Каталог: giftsofprometheus.com" src="https://img.shields.io/badge/каталог-giftsofprometheus.com-173a63.svg?style=for-the-badge&amp;labelColor=0a0f1c" height="28"></a>
   <a href="https://www.npmjs.com/package/@giftsofprometheus/cli"><img alt="npm" src="https://img.shields.io/npm/v/@giftsofprometheus/cli.svg?style=for-the-badge&amp;labelColor=0a0f1c&amp;color=173a63" height="28"></a>
-  <a href="https://github.com/timurkhakhalev/giftsofprometheus-cli/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/timurkhakhalev/giftsofprometheus-cli/ci.yml?branch=main&amp;style=for-the-badge&amp;labelColor=0a0f1c&amp;color=173a63&amp;label=CI" height="28"></a>
-  <a href="LICENSE"><img alt="Лицензия: Apache-2.0" src="https://img.shields.io/github/license/timurkhakhalev/giftsofprometheus-cli.svg?style=for-the-badge&amp;labelColor=0a0f1c&amp;color=173a63" height="28"></a>
+  <a href="https://github.com/giftsofprometheus/giftsofprometheus-cli/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/giftsofprometheus/giftsofprometheus-cli/ci.yml?branch=main&amp;style=for-the-badge&amp;labelColor=0a0f1c&amp;color=173a63&amp;label=CI" height="28"></a>
+  <a href="LICENSE"><img alt="Лицензия: Apache-2.0" src="https://img.shields.io/github/license/giftsofprometheus/giftsofprometheus-cli.svg?style=for-the-badge&amp;labelColor=0a0f1c&amp;color=173a63" height="28"></a>
 </p>
 
 ## Зачем это нужно
@@ -54,13 +54,13 @@ giftsofprometheus feed                              # подборка по ва
 В репозитории есть skill: он объясняет агенту, когда и как пользоваться CLI. Поставить его можно через [skills](https://skills.sh):
 
 ```bash
-npx skills add timurkhakhalev/giftsofprometheus-cli
+npx skills add giftsofprometheus/giftsofprometheus-cli
 ```
 
 В Claude Code его можно поставить и как плагин:
 
 ```text
-/plugin marketplace add timurkhakhalev/giftsofprometheus-cli
+/plugin marketplace add giftsofprometheus/giftsofprometheus-cli
 /plugin install giftsofprometheus@giftsofprometheus
 ```
 
@@ -150,7 +150,7 @@ node dist/index.js --help
 
 ## Участие
 
-Об ошибках пишите в [Issues](https://github.com/timurkhakhalev/giftsofprometheus-cli/issues), идеи и вопросы — в [Discussions](https://github.com/timurkhakhalev/giftsofprometheus-cli/discussions). Pull requests репозиторий не принимает, подробнее в [CONTRIBUTING.md](CONTRIBUTING.md). Об уязвимостях сообщайте приватно, как описано в [SECURITY.md](SECURITY.md).
+Об ошибках пишите в [Issues](https://github.com/giftsofprometheus/giftsofprometheus-cli/issues), идеи и вопросы — в [Discussions](https://github.com/giftsofprometheus/giftsofprometheus-cli/discussions). Pull requests репозиторий не принимает, подробнее в [CONTRIBUTING.md](CONTRIBUTING.md). Об уязвимостях сообщайте приватно, как описано в [SECURITY.md](SECURITY.md).
 
 ## Лицензия
 
