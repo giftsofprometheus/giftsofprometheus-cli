@@ -10,7 +10,7 @@ allowed-tools: Bash(giftsofprometheus:*), Bash(npx -y @giftsofprometheus/cli:*),
 
 ## Setup
 
-Run `command -v giftsofprometheus`. If it is missing, run every command below as `npx -y @giftsofprometheus/cli` with the same arguments instead of `giftsofprometheus`, and mention once that a permanent install is described in https://github.com/timurkhakhalev/giftsofprometheus-cli#install. If `npx` is missing or disabled, use `pnpm dlx @giftsofprometheus/cli` or `bunx @giftsofprometheus/cli`. If none of them runs, ask the user to install the CLI and stop.
+Run `command -v giftsofprometheus`. If it is missing, run every command below as `npx -y @giftsofprometheus/cli` with the same arguments instead of `giftsofprometheus`, and mention once that a permanent install is described in https://github.com/giftsofprometheus/giftsofprometheus-cli#install. If `npx` is missing or disabled, use `pnpm dlx @giftsofprometheus/cli` or `bunx @giftsofprometheus/cli`. If none of them runs, ask the user to install the CLI and stop.
 
 Use only the CLI. Do not call the site's API with `curl`, `fetch` or a script, even for public data: the service refuses any client other than the site and the CLI with `cli_required`, and its rules on `recId`, sign-in and feedback live in the CLI and this skill. For a path that no command covers, use `request` (see Read).
 
