@@ -6,7 +6,7 @@ Only the latest release of the CLI receives fixes.
 
 ## Reporting a vulnerability
 
-Report vulnerabilities in the CLI or in the giftsofprometheus.com API privately through [GitHub security advisories](https://github.com/timurkhakhalev/giftsofprometheus-cli/security/advisories/new). Do not open a public issue.
+Report vulnerabilities in the CLI or in the giftsofprometheus.com API privately through [GitHub security advisories](https://github.com/giftsofprometheus/giftsofprometheus-cli/security/advisories/new). Do not open a public issue.
 
 Include the affected version, steps to reproduce and the impact you expect. You will get a reply within a few days.
 
