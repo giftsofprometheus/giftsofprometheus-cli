@@ -1,10 +1,10 @@
 <p align="center">
-  <a href="https://giftsofprometheus.com/?utm_source=github&amp;utm_medium=readme&amp;utm_campaign=cli"><img alt="Дары Прометея: доклады AI-конференций на русском" src=".github/assets/banner.jpg" width="100%"></a>
+  <a href="https://giftsofprometheus.com/?utm_source=github&amp;utm_medium=readme&amp;utm_campaign=cli"><img alt="Дары Прометея: мировые знания об ИИ на русском" src=".github/assets/banner.jpg" width="100%"></a>
 </p>
 
-# Дары Прометея CLI: доклады AI-конференций на русском для вас и вашего AI-агента
+# Дары Прометея CLI: мировые знания об ИИ на русском для вас и вашего AI-агента
 
-**[Дары Прометея](https://giftsofprometheus.com/?utm_source=github&utm_medium=readme&utm_campaign=cli)** — каталог докладов мировых AI-конференций на русском языке: AI Engineer World's Fair, AI Engineer Summit, BAAI Conference (北京智源大会), Apsara Conference (云栖大会) и другие. У каждого доклада есть русское название, подробное описание с TL;DR, главы с таймкодами, профили спикеров и полный транскрипт.
+**[Дары Прометея](https://giftsofprometheus.com/?utm_source=github&utm_medium=readme&utm_campaign=cli)** — мировые знания об ИИ на русском: доклады о разработке с AI-агентами, RAG, evals, MCP и AI-продуктах с русскими названиями, подробными описаниями с TL;DR, главами с таймкодами, профилями спикеров и полными транскриптами.
 
 Этот CLI открывает каталог для терминала и AI-агентов: Claude Code, Codex, Cursor и других. Агент сам подберёт доклады под вашу задачу, прочитает транскрипт и сохранит полезное в избранное вашего аккаунта на [giftsofprometheus.com](https://giftsofprometheus.com/?utm_source=github&utm_medium=readme&utm_campaign=cli).
 
@@ -17,11 +17,11 @@
 
 ## Зачем это нужно
 
-- **Мировой опыт AI-инженерии на русском.** Больше 1400 докладов о кодинг-агентах, RAG, evals, MCP и архитектуре агентов. Не нужно смотреть часовые видео на английском или китайском, чтобы понять, стоит ли доклад вашего времени.
+- **Мировой опыт AI-инженерии на русском.** Доклады о кодинг-агентах, RAG, evals, MCP и архитектуре агентов от команд, которые делают это в продакшене. Не нужно смотреть часовые видео на английском или китайском, чтобы понять, стоит ли доклад вашего времени.
 - **Ответ под вашу задачу, а не список ссылок.** Опишите агенту, над чем работаете. Он найдёт доклады, прочитает транскрипты и перескажет, что из них применимо у вас.
 - **Один аккаунт для сайта и агента.** Что агент сохранил, появится в [избранном на сайте](https://giftsofprometheus.com/account?utm_source=github&utm_medium=readme&utm_campaign=cli). Интересы, которые вы указали [на сайте](https://giftsofprometheus.com/welcome?utm_source=github&utm_medium=readme&utm_campaign=cli), агент учитывает в подборке.
 
-Удобнее читать глазами? Всё то же самое есть на [giftsofprometheus.com](https://giftsofprometheus.com/?utm_source=github&utm_medium=readme&utm_campaign=cli): [подбор докладов за минуту](https://giftsofprometheus.com/welcome?utm_source=github&utm_medium=readme&utm_campaign=cli), [персональная лента](https://giftsofprometheus.com/for-you?utm_source=github&utm_medium=readme&utm_campaign=cli) и [спикеры](https://giftsofprometheus.com/speakers?utm_source=github&utm_medium=readme&utm_campaign=cli).
+Удобнее читать глазами? Всё то же самое есть на [giftsofprometheus.com](https://giftsofprometheus.com/?utm_source=github&utm_medium=readme&utm_campaign=cli): [подбор докладов за минуту](https://giftsofprometheus.com/welcome?utm_source=github&utm_medium=readme&utm_campaign=cli), [персональная лента](https://giftsofprometheus.com/for-you?utm_source=github&utm_medium=readme&utm_campaign=cli) [спикеры](https://giftsofprometheus.com/speakers?utm_source=github&utm_medium=readme&utm_campaign=cli), [статьи об AI-агентах](https://giftsofprometheus.com/articles?utm_source=github&utm_medium=readme&utm_campaign=cli) и [календарь AI-конференций, митапов и хакатонов](https://giftsofprometheus.com/events?utm_source=github&utm_medium=readme&utm_campaign=cli).
 
 ## Установка
 
@@ -91,7 +91,7 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 
 ## Что есть в каталоге
 
-**Конференции:** [AI Engineer World's Fair 2026](https://giftsofprometheus.com/events/ai-engineer-world-s-fair-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer World's Fair 2025](https://giftsofprometheus.com/events/ai-engineer-world-s-fair-2025?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Europe 2026](https://giftsofprometheus.com/events/ai-engineer-europe-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer World's Fair 2024](https://giftsofprometheus.com/events/ai-engineer-world-s-fair-2024?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Code 2025](https://giftsofprometheus.com/events/ai-engineer-code-2025?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Summit 2025](https://giftsofprometheus.com/events/ai-engineer-summit-2025?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Summit 2023](https://giftsofprometheus.com/events/ai-engineer-summit-2023?utm_source=github&utm_medium=readme&utm_campaign=cli), [BAAI Conference 2026 · 北京智源大会](https://giftsofprometheus.com/events/baai-conference-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [Apsara Conference 2026 · 云栖大会](https://giftsofprometheus.com/events/apsara-conference-2026?utm_source=github&utm_medium=readme&utm_campaign=cli).
+**Конференции:** [AI Engineer World's Fair 2026](https://giftsofprometheus.com/events/ai-engineer-world-s-fair-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer World's Fair 2025](https://giftsofprometheus.com/events/ai-engineer-world-s-fair-2025?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Europe 2026](https://giftsofprometheus.com/events/ai-engineer-europe-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [Agentic Dev Conf 2026](https://giftsofprometheus.com/events/agentic-dev-conf-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Code 2026](https://giftsofprometheus.com/events/ai-engineer-code-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer New York 2026](https://giftsofprometheus.com/events/ai-engineer-new-york-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer NYC 2026 Online Talks](https://giftsofprometheus.com/events/ai-engineer-nyc-2026-online-talks?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer World's Fair 2024](https://giftsofprometheus.com/events/ai-engineer-world-s-fair-2024?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Code 2025](https://giftsofprometheus.com/events/ai-engineer-code-2025?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Summit 2025](https://giftsofprometheus.com/events/ai-engineer-summit-2025?utm_source=github&utm_medium=readme&utm_campaign=cli), [AI Engineer Summit 2023](https://giftsofprometheus.com/events/ai-engineer-summit-2023?utm_source=github&utm_medium=readme&utm_campaign=cli), [BAAI Conference 2026 · 北京智源大会](https://giftsofprometheus.com/events/baai-conference-2026?utm_source=github&utm_medium=readme&utm_campaign=cli), [Apsara Conference 2026 · 云栖大会](https://giftsofprometheus.com/events/apsara-conference-2026?utm_source=github&utm_medium=readme&utm_campaign=cli).
 
 **Темы:**
 

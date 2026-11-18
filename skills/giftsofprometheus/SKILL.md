@@ -1,6 +1,6 @@
 ---
 name: giftsofprometheus
-description: Find AI conference talks (AI Engineer, BAAI, Apsara and others) with Russian summaries, read their full transcripts, and manage the signed-in user's favorites, interests and personal feed through the giftsofprometheus CLI, and build a starting profile in the chat. Use when the user asks for talks, speakers or transcripts on an AI engineering topic, or wants to save, list or remove favorites on Gifts of Prometheus.
+description: Find AI engineering talks from conferences around the world with Russian summaries, read their full transcripts, and manage the signed-in user's favorites, interests and personal feed through the giftsofprometheus CLI, and build a starting profile in the chat. Use when the user asks for talks, speakers or transcripts on an AI engineering topic, or wants to save, list or remove favorites on Gifts of Prometheus.
 allowed-tools: Bash(giftsofprometheus:*), Bash(npx -y @giftsofprometheus/cli:*), Bash(pnpm dlx @giftsofprometheus/cli:*), Bash(bunx @giftsofprometheus/cli:*)
 ---
 
