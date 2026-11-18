@@ -623,16 +623,17 @@ program
   .command('ask')
   .description('Find relevant passages in talk transcripts')
   .argument('<query>', 'question or search formulation')
-  .option('--q <query>', 'another formulation, up to three in total', (value: string, previous: string[]) => [...previous, value], [])
-  .option('--limit <n>', 'maximum number of talks')
-  .option('--per-talk <n>', 'maximum passages per talk')
+  .option(
+    '--q <query>',
+    'another formulation; the query and --q together are at most three, so at most two --q',
+    (value: string, previous: string[]) => [...previous, value],
+    []
+  )
+  .option('--limit <n>', 'maximum number of talks (1-20)')
+  .option('--per-talk <n>', 'maximum passages per talk (1-3)')
   .action(
     run((query: string, options: { q: string[]; limit?: string; perTalk?: string }) => {
-      const queries = z
-        .array(z.string().trim().min(1).max(200))
-        .min(1)
-        .max(3)
-        .parse([query, ...options.q])
+      const queries = askQueries([query, ...options.q])
 
       const number = z.string().regex(/^\d+$/)
       const params = new URLSearchParams()
@@ -646,6 +647,30 @@ program
       return request(`/api/knowledge/passages?${params}`)
     })
   )
+
+/** The service takes one to three texts of up to 200 characters; a plain message tells an agent what to drop */
+function askQueries(values: string[]) {
+  const queries = values.map(value => value.trim())
+
+  if (queries.some(value => !value)) throw new ApiError('Empty formulation: the query and every --q need text')
+
+  if (queries.length > 3)
+    throw new ApiError(`ask takes at most 3 formulations in total: the query and up to two --q. Got ${queries.length}; drop ${queries.length - 3}.`)
+  const long = queries.find(value => value.length > 200)
+
+  if (long !== undefined) throw new ApiError(`A formulation is longer than 200 characters (${long.length}); shorten it`)
+
+  return queries
+}
+
+/** Seconds as `90`, `1:30` or `1:02:03` */
+function seconds(value: string) {
+  if (!/^\d+(:\d{1,2}){0,2}$/.test(value)) throw new ApiError(`Invalid time "${value}": use seconds (90), m:ss (1:30) or h:mm:ss (1:02:03)`)
+
+  return value.split(':').reduce((total, part) => total * 60 + Number(part), 0)
+}
+
+const contentShape = z.object({ transcript: z.array(z.object({ startMs: z.number() }).loose()) }).loose()
 
 const talks = program.command('talks').description('Browse talks')
 
@@ -688,11 +713,29 @@ talks
   .command('content')
   .argument('<slug-or-id>')
   .option('--rec-id <recId>', 'recId of the list the talk came from (feed, search or similar)')
+  .option('--from <time>', 'keep transcript segments that start at or after this time: seconds, m:ss or h:mm:ss')
+  .option('--to <time>', 'keep transcript segments that start before this time')
+  .option('--outline', 'speakers, chapters and publication without the transcript')
   .action(
-    run(async (id: string, options: { recId?: string }) => {
+    run(async (id: string, options: { recId?: string; from?: string; to?: string; outline?: boolean }) => {
       const query = recIdQuery(options.recId)
+      const from = options.from === undefined ? 0 : seconds(options.from) * 1000
+      const to = options.to === undefined ? Infinity : seconds(options.to) * 1000
+
+      if (from >= to) throw new ApiError('--from must be earlier than --to')
       const talk = await resolveTalk(id)
-      const result = await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/content${query}`, 'POST')
+      const raw = await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/content${query}`, 'POST')
+      const whole = !options.outline && options.from === undefined && options.to === undefined
+      const content = whole ? null : contentShape.parse(raw)
+
+      // A range keeps the chapters, so an agent still sees where it is in the talk
+      const result =
+        content === null
+          ? raw
+          : options.outline
+            ? { ...content, transcript: undefined, transcriptSegments: content.transcript.length }
+            : { ...content, transcript: content.transcript.filter(segment => segment.startMs >= from && segment.startMs < to) }
+
       // After the transcript: talks like this one, or saving it if the user found it useful
       console.error(`Next: similar talks — ${launcher} talks similar ${talk.slug}; save it if the user asks — ${launcher} favorites add ${talk.slug}`)
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- `talks content --from <time> --to <time>` keeps only the transcript segments that start in that stretch (seconds, `m:ss` or `h:mm:ss`); chapters stay whole. `--outline` returns speakers, chapters and publication with the number of segments instead of the transcript.
+- `ask` explains its limits before any request: at most three formulations in total (the query and up to two `--q`), none empty, each up to 200 characters. It used to print a raw validation error.
+- Speakers in talk cards and in `talks content` carry `organization` and `jobTitle` from the service (`null` when unknown).
+- Skill: `ask` takes the query and up to two `--q`; read around a passage with `--outline` and `--from`/`--to`; link to the second where the cited words start and keep the `recId`; name a speaker's company only from `organization`, attribute claims in panels only when the transcript shows who speaks; for "how does the industry do X", lead with companies describing their own production and say when the evidence is mostly vendor talks.
+
 ## 0.6.1
 
 - Skill: use only the CLI and never call the site's API directly; the service now answers other clients with 403 `cli_required`. Without `npx`, run the CLI with `pnpm dlx` or `bunx`; if nothing runs, ask the user to install it and stop.
