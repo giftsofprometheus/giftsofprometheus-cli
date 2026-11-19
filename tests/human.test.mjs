@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, symlink } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,7 +58,7 @@ const routes = {
   'GET /api/knowledge/talks?q=broken&page=1': { items: [{ ...talk, slug: '\ud800' }], page: 1, totalPages: 1 },
 }
 
-async function harness() {
+async function harness(program = executable) {
   const config = await mkdtemp(join(tmpdir(), 'giftsofprometheus-human-'))
 
   const server = createServer((request, response) => {
@@ -73,7 +73,7 @@ async function harness() {
 
   const cli = args =>
     new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [executable, ...args], {
+      const child = spawn(process.execPath, [program, ...args], {
         env: {
           ...process.env,
           GIFTSOFPROMETHEUS_URL: base,
@@ -101,6 +101,9 @@ test('without --json commands print text for a person; with --json the same comm
   try {
     // The agent contract is unchanged: doctor names the plain command, talks content keeps its hint
     assert.equal(JSON.parse((await h.cli(['--json', 'doctor'])).stdout).nextStep, 'Run giftsofprometheus login')
+
+    // The service takes the recId of an anonymous list only from the site, so a signed-out search does not offer it
+    assert.doesNotMatch((await h.cli(['talks', 'search', '--', '-foo'])).stdout, /--rec-id/)
     const login = await h.cli(['login'])
     assert.equal(login.code, 0, login.stderr)
     assert.equal(login.stdout, 'Signed in. The session lasts 30 days.\n')
@@ -153,6 +156,10 @@ test('without --json commands print text for a person; with --json the same comm
     const renamed = await h.cli(['talks', 'content', 'renamed'])
     assert.equal(renamed.code, 0)
     assert.deepEqual(JSON.parse(renamed.stdout).segments, [])
+    const outline = await h.cli(['talks', 'content', 'renamed', '--outline'])
+    assert.equal(outline.code, 0, outline.stderr)
+    assert.deepEqual(JSON.parse(outline.stdout).segments, [])
+    assert.equal((await h.cli(['--json', 'talks', 'content', 'renamed', '--outline'])).code, 1, '--json fails on it as before')
     const broken = await h.cli(['talks', 'search', 'broken'])
     assert.equal(broken.code, 0, broken.stderr)
     assert.equal(JSON.parse(broken.stdout).items.length, 1)
@@ -162,6 +169,31 @@ test('without --json commands print text for a person; with --json the same comm
 
     assert.deepEqual(JSON.parse((await h.cli(['--json', 'whoami'])).stdout), { email: 'reader@example.com' })
     assert.equal(JSON.parse((await h.cli(['--json', 'talks', 'list'])).stdout).totalPages, 3)
+  } finally {
+    await h.close()
+  }
+})
+
+test('hints name the launcher that ran the CLI for a person; --json keeps the plain command', async () => {
+  // The layout bunx leaves in its cache: <tmp>/bunx-<uid>-<package>/node_modules/@giftsofprometheus/cli
+  const cache = await mkdtemp(join(tmpdir(), 'giftsofprometheus-launcher-'))
+  const packageRoot = join(cache, 'bunx-1000-@giftsofprometheus', 'cli@latest', 'node_modules', '@giftsofprometheus', 'cli')
+  const source = fileURLToPath(new URL('../', import.meta.url))
+  await mkdir(packageRoot, { recursive: true })
+
+  for (const entry of ['dist', 'skills', 'package.json']) await cp(join(source, entry), join(packageRoot, entry), { recursive: true })
+  await symlink(join(source, 'node_modules'), join(packageRoot, 'node_modules'))
+  const h = await harness(join(packageRoot, 'dist', 'index.js'))
+
+  try {
+    assert.match(
+      (await h.cli(['talks', 'get', 'agents-building-agents'])).stderr,
+      /^Next: the full transcript — bunx @giftsofprometheus\/cli talks content agents-building-agents/
+    )
+    assert.equal(
+      (await h.cli(['--json', 'talks', 'get', 'agents-building-agents'])).stderr,
+      'Next: the full transcript — giftsofprometheus talks content agents-building-agents (asks you to sign in in the browser first)\n'
+    )
   } finally {
     await h.close()
   }

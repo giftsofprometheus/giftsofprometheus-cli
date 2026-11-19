@@ -8,6 +8,7 @@
 - Lists from search, feed, similar and `ask` show the `--rec-id` commands for opening or saving a talk from them; next-page commands keep `--limit` and put the search query after `--`.
 - Text output strips control characters from server text, also in hints; the JSON fallback for `request` and unexpected responses escapes DEL and C1 characters. A response the text form cannot show prints as JSON.
 - `talks get` shows speakers with job titles; `talks`, `favorites` and `profile get` subcommands have help descriptions.
+- `--json` output keeps its bytes: hints and the `skill personalize` command name `giftsofprometheus` (or `npx @giftsofprometheus/cli`) as before; the `bunx` and `pnpm dlx` launchers appear only in text output. A signed-out search shows no `--rec-id`: the service accepts the recId of an anonymous list only from the site.
 - `NO_COLOR` turns off bold and dim text.
 - Skill: pass `--json` to every command.
 

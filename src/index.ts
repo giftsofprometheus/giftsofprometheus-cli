@@ -107,6 +107,12 @@ async function readState<T>(file: string, schema: z.ZodType<T & { base: string }
   }
 }
 
+// Whether a request of this run carried the session; the service accepts the recId of an anonymous list only from the site
+let sentSession = false
+
+/** Drops the recId from the text form when the list was delivered without a session */
+const attributed = <T extends { recId?: string }>(value: T): T => (sentSession ? value : { ...value, recId: undefined })
+
 async function request(path: string, method = 'GET', body?: unknown, authenticated = true): Promise<unknown> {
   if (!path.startsWith('/') || path.includes('\\'))
     throw new ApiError(`Invalid API path: pass a full path starting with ${publicApi.join(', ')}, e.g. /api/knowledge/profile`)
@@ -120,7 +126,10 @@ async function request(path: string, method = 'GET', body?: unknown, authenticat
   const credential = authenticated ? await stored() : null
   const headers = new Headers({ 'Content-Type': 'application/json', 'X-Knowledge-Client': 'agent', 'User-Agent': `giftsofprometheus/${version}` })
 
-  if (credential) headers.set('Authorization', `Bearer ${credential.token}`)
+  if (credential) {
+    headers.set('Authorization', `Bearer ${credential.token}`)
+    sentSession = true
+  }
 
   for (let attempt = 1; ; attempt++) {
     let response: Response
@@ -195,7 +204,7 @@ const view =
 const hints: Array<{ json: string; human: string | null }> = []
 
 /** `human` replaces the line for a person; null shows nothing, when the text output already says it */
-const hint = (json: string, human: string | null = json) => hints.push({ json: printable(json), human: human === null ? null : printable(human) })
+const hint = (json: string, human: string | null = json) => hints.push({ json, human: human === null ? null : printable(human) })
 
 // JSON.stringify escapes C0 control characters but not DEL and C1; a person's terminal would interpret those
 // oxlint-disable-next-line no-control-regex -- matching control characters is the purpose of this expression
@@ -239,7 +248,7 @@ function run<Args extends unknown[]>(fn: (...args: Args) => Promise<unknown>, re
       const status = e instanceof ApiError ? e.status : 1
       const code = e instanceof ApiError ? e.code : undefined
       // On 401 the CLI's own steps win: they say how to sign in from an agent, which the service cannot know. A person runs login
-      const signIn = program.opts().json ? SIGN_IN_STEPS : `sign in with ${launcher} login, then repeat this command`
+      const signIn = program.opts().json ? SIGN_IN_STEPS : `sign in with ${cmd()} login, then repeat this command`
       const nextStep = status === 401 ? signIn : e instanceof ApiError ? e.nextStep : undefined
 
       if (program.opts().json) console.log(JSON.stringify({ error: { message, status, ...(code ? { code } : {}), ...(nextStep ? { nextStep } : {}) } }))
@@ -277,7 +286,7 @@ const updateCommand = /[\\/]pnpm[\\/]global[\\/]/.test(packageRoot)
     : 'npm install -g @giftsofprometheus/cli@latest'
 
 // The command a person typed, so a hint can be pasted back as is
-const launcher = /[\\/]_npx[\\/]/.test(packageRoot)
+const detectedLauncher = /[\\/]_npx[\\/]/.test(packageRoot)
   ? 'npx @giftsofprometheus/cli'
   : /[\\/]bunx-[^\\/]*[\\/]/.test(packageRoot)
     ? 'bunx @giftsofprometheus/cli'
@@ -285,7 +294,12 @@ const launcher = /[\\/]_npx[\\/]/.test(packageRoot)
       ? 'pnpm dlx @giftsofprometheus/cli'
       : 'giftsofprometheus'
 
-const context = { launcher, base }
+// --json output keeps the commands it has always named: agents follow them, and the skill says how to run the CLI
+const jsonLauncher = /[\\/]_npx[\\/]/.test(packageRoot) ? 'npx @giftsofprometheus/cli' : 'giftsofprometheus'
+
+const cmd = () => (program.opts().json ? jsonLauncher : detectedLauncher)
+
+const context = { launcher: detectedLauncher, base }
 
 const shortPath = (path: string) => (path.startsWith(homedir()) ? '~' + path.slice(homedir().length) : path)
 
@@ -672,11 +686,7 @@ program
           // `installed: false` for npx and source runs: they already use the version they asked for
           update: { installed, current: version, latest, available: Boolean(installed && latest && newerVersion(latest, version)), command: updateCommand },
           skills: skills.map(skill => ({ path: skill.path, status: skill.status, version: skill.version })),
-          nextStep: !reachable
-            ? 'Check GIFTSOFPROMETHEUS_URL and server availability'
-            : !authenticated
-              ? `Run ${program.opts().json ? 'giftsofprometheus' : launcher} login`
-              : null,
+          nextStep: !reachable ? 'Check GIFTSOFPROMETHEUS_URL and server availability' : !authenticated ? `Run ${cmd()} login` : null,
         }
       },
       view(text.doctorSchema, text.doctor)
@@ -768,9 +778,9 @@ talks
       view(text.pageSchema, (value, query: string) =>
         text.talkPage(
           context,
-          value,
+          attributed(value),
           page => `talks search --page ${page} -- ${shellQuote(query)}`,
-          `Nothing found. Search the transcripts instead: ${launcher} ask -- ${shellQuote(query)}`
+          `Nothing found. Search the transcripts instead: ${cmd()} ask -- ${shellQuote(query)}`
         )
       )
     )
@@ -786,7 +796,7 @@ talks
         const talk = await resolveTalk(id)
         // The next step after the summary is the transcript; stdout stays the talk's JSON
         const signedIn = Boolean(await stored())
-        hint(`Next: the full transcript — ${launcher} talks content ${talk.slug}${signedIn ? '' : ' (asks you to sign in in the browser first)'}`)
+        hint(`Next: the full transcript — ${cmd()} talks content ${talk.slug}${signedIn ? '' : ' (asks you to sign in in the browser first)'}`)
 
         return talk
       },
@@ -813,7 +823,10 @@ talks
         const talk = await resolveTalk(id)
         const raw = await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/content${query}`, 'POST')
         const whole = !options.outline && options.from === undefined && options.to === undefined
-        const content = whole ? null : contentShape.parse(raw)
+        const parsed = whole ? null : contentShape.safeParse(raw)
+
+        if (parsed && !parsed.success && program.opts().json) throw parsed.error
+        const content = parsed?.success ? parsed.data : null
 
         // A range keeps the chapters, so an agent still sees where it is in the talk
         const result =
@@ -825,8 +838,8 @@ talks
 
         // After the transcript: talks like this one, or saving it if the user found it useful
         hint(
-          `Next: similar talks — ${launcher} talks similar ${talk.slug}; save it if the user asks — ${launcher} favorites add ${talk.slug}`,
-          `Next: similar talks — ${launcher} talks similar ${talk.slug}; save to favorites — ${launcher} favorites add ${talk.slug}${options.recId ? ` --rec-id ${options.recId}` : ''}`
+          `Next: similar talks — ${cmd()} talks similar ${talk.slug}; save it if the user asks — ${cmd()} favorites add ${talk.slug}`,
+          `Next: similar talks — ${cmd()} talks similar ${talk.slug}; save to favorites — ${cmd()} favorites add ${talk.slug}${options.recId ? ` --rec-id ${options.recId}` : ''}`
         )
 
         return result
@@ -850,11 +863,11 @@ talks
           .loose()
           .parse(await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/similar`))
 
-        if (result.recId) hint(`Next: open one with ${launcher} talks content <slug> --rec-id ${result.recId}`, null)
+        if (result.recId) hint(`Next: open one with ${cmd()} talks content <slug> --rec-id ${result.recId}`, null)
 
         return result
       },
-      view(text.listSchema, value => text.talkList(context, value, 'No similar talks yet.'))
+      view(text.listSchema, value => text.talkList(context, attributed(value), 'No similar talks yet.'))
     )
   )
 
@@ -893,7 +906,7 @@ favorites
           context,
           value,
           page => `favorites list --page ${page} --limit ${shellQuote(o.limit)}`,
-          `No favorites yet. Save a talk with: ${launcher} favorites add <slug>`
+          `No favorites yet. Save a talk with: ${cmd()} favorites add <slug>`
         )
       )
     )
@@ -965,7 +978,7 @@ profile
   .option('--interest <topic=level>', 'set a topic to high, interested or not_interested; repeatable', collect, [])
   .option('--remove-interest <topic>', 'remove a topic; repeatable', collect, [])
   .option('--query-text <text>', 'replace the current task; an empty string clears it')
-  .action(run(updateProfile, () => `Profile updated. See it with: ${launcher} profile get`))
+  .action(run(updateProfile, () => `Profile updated. See it with: ${cmd()} profile get`))
 
 const draftLevels = z.enum(['interested', 'not_interested'])
 
@@ -1134,7 +1147,7 @@ onboarding
   .command('finish')
   .description('Save the draft to the signed-in account')
   .option('--query-text <text>', 'replace the query text kept in the draft')
-  .action(run(onboardingFinish, () => `Saved to your account. Recommendations: ${launcher} feed`))
+  .action(run(onboardingFinish, () => `Saved to your account. Recommendations: ${cmd()} feed`))
 
 program
   .command('feed')
@@ -1142,7 +1155,7 @@ program
   .action(
     run(
       () => request('/api/knowledge/feed'),
-      view(text.listSchema, value => text.talkList(context, value, `No recommendations yet. Build a profile with: ${launcher} onboarding topics`))
+      view(text.listSchema, value => text.talkList(context, value, `No recommendations yet. Build a profile with: ${cmd()} onboarding topics`))
     )
   )
 
@@ -1234,7 +1247,7 @@ async function personalizeSkill(o: { file: string }) {
       path: file,
       topics,
       reason: e instanceof Error ? e.message : 'Write failed',
-      command: `${launcher} skill personalize --file ${shellQuote(file)}`,
+      command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
     }
   }
 
