@@ -109,7 +109,7 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 
 ## Команды
 
-С флагом `--json` любая команда печатает компактный JSON. Ошибка тогда выглядит как `{"error":{"message","status","code","nextStep"}}`, а код выхода — 1: `code` и `nextStep` приходят от сервиса, когда он их знает. После обрыва соединения или ответа 502, 503 или 504 от прокси CLI сам повторяет запрос два раза.
+Без флагов команды печатают текст для человека: списки докладов с номерами и ссылками, транскрипт с главами и таймкодами, подсказку со следующей командой. С флагом `--json` любая команда печатает компактный JSON: так CLI вызывают агенты. Ошибка тогда выглядит как `{"error":{"message","status","code","nextStep"}}`, а код выхода — 1: `code` и `nextStep` приходят от сервиса, когда он их знает. После обрыва соединения или ответа 502, 503 или 504 от прокси CLI сам повторяет запрос два раза.
 
 | Команда | Что делает | Аккаунт |
 |---|---|---|
@@ -118,18 +118,22 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 | `talks list [--page n]` | Каталог по страницам | |
 | `talks get <slug-или-id>` | Доклад с описанием, спикерами (компания и должность), темами и видео | |
 | `talks content <slug-или-id> [--rec-id UUID] [--from время] [--to время] [--outline]` | Транскрипт на языке доклада: целиком, отрезок (`--from 12:30 --to 18:00`) или только спикеры и главы (`--outline`) | ✓ |
+| `talks similar <slug-или-id>` | До четырёх похожих докладов, у каждого причина | |
+| `talks react <slug-или-id> like\|dislike\|not-interested\|clear [--rec-id UUID]` | Отметить, понравился ли доклад; учитывается в подборке | ✓ |
 | `favorites list [--page n] [--limit n]` | Ваше избранное | ✓ |
 | `favorites add <slug-или-id>` / `remove` | Добавить в избранное или убрать | ✓ |
 | `profile get` | Ваши интересы и текущая задача | ✓ |
 | `profile update [--interest тема=уровень] [--remove-interest тема] [--query-text текст]` | Изменить интересы (`high`, `interested`, `not_interested`) или текущую задачу; остальное не меняется | ✓ |
 | `feed` | Подборка по вашему профилю | ✓ |
-| `request <путь>` | GET-запрос только на чтение к `/api/knowledge/…` или `/api/account/…` | ✓ |
+| `request <путь>` | GET-запрос только на чтение к `/api/knowledge/…` или `/api/account/…`; печатает ответ сервиса как JSON | ✓ |
 | `onboarding topics` | Темы для выбора интересов | |
 | `onboarding deck [--interest тема=уровень] [--query-text текст]` | Новый черновик по темам (`interested`, `not_interested`) и до 8 пронумерованных докладов для оценки | |
 | `onboarding react <номер>=like\|dislike\|skip…` | Оценить доклады из колоды по номерам и получить рекомендации, к которым они ведут | |
 | `onboarding finish [--query-text текст]` | Сохранить черновик в аккаунт | ✓ |
 | `login [--start\|--wait]`, `logout`, `whoami`, `doctor` | Вход, выход, текущий аккаунт, проверка настройки. `login --start` сразу печатает ссылку и код, `login --wait` ждёт подтверждения | |
 | `skill [--path]` | Skill для агента | |
+| `skill update [--force]` | Обновить установленные копии skill до версии CLI | |
+| `skill personalize --file <путь>` | Добавить ваши темы в описание skill | ✓ |
 
 ## Настройки
 
@@ -137,6 +141,7 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 |---|---|---|
 | `GIFTSOFPROMETHEUS_URL` | `https://giftsofprometheus.com` | Адрес сервиса. HTTP без TLS разрешён только для `localhost` |
 | `XDG_CONFIG_HOME` | `~/.config` | Где хранится сессия; относительный путь игнорируется |
+| `NO_COLOR` | не задана | Любое значение отключает жирный и приглушённый текст в выводе |
 
 ## Разработка
 

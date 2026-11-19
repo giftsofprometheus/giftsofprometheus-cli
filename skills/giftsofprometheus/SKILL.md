@@ -14,6 +14,8 @@ Run `command -v giftsofprometheus`. If it is missing, run every command below as
 
 Use only the CLI. Do not call the site's API with `curl`, `fetch` or a script, even for public data: the service refuses any client other than the site and the CLI with `cli_required`, and its rules on `recId`, sign-in and feedback live in the CLI and this skill. For a path that no command covers, use `request` (see Read).
 
+Pass `--json` to every command, as in the examples below: without it the CLI prints text for a person, not JSON.
+
 Then run `giftsofprometheus --json doctor`:
 
 - `reachable: false`: the service is unavailable; report it and stop.

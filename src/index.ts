@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailTopics } from './skill-files.js'
+import * as text from './render.js'
+import { printable } from './render.js'
 
 const { version } = z.object({ version: z.string() }).parse(createRequire(import.meta.url)('../package.json'))
 
@@ -76,10 +78,6 @@ class ApiError extends Error {
   }
 }
 
-// Server text reaches a terminal: remove control characters so a response cannot inject ANSI or OSC escape sequences
-// oxlint-disable-next-line no-control-regex -- matching control characters is the purpose of this function
-const printable = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
-
 // A fresh 0600 file renamed into place: a secret never lands in an existing file with loose permissions or behind a symlink
 async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -108,6 +106,9 @@ async function readState<T>(file: string, schema: z.ZodType<T & { base: string }
     return null
   }
 }
+
+// Set when a command returns a response it could not check; the text form then shows it as JSON instead of reading it
+let unchecked = false
 
 async function request(path: string, method = 'GET', body?: unknown, authenticated = true): Promise<unknown> {
   if (!path.startsWith('/') || path.includes('\\'))
@@ -177,8 +178,42 @@ const RETRY_DELAYS_MS = [500, 1500]
 
 const GATEWAY_STATUSES = new Set([502, 503, 504])
 
-function out(value: unknown) {
-  console.log(JSON.stringify(value, null, program.opts().json ? 0 : 2))
+/** Turns a command's result into text for a person; null when the result has an unexpected shape */
+type Render<Args extends unknown[]> = (value: unknown, ...args: Args) => string | null
+
+/** A renderer that checks the shape first, so a service change shows the JSON instead of crashing the command */
+const view =
+  <T, Args extends unknown[] = unknown[]>(schema: z.ZodType<T>, format: (value: T, ...args: Args) => string): Render<Args> =>
+  (value, ...args) => {
+    const parsed = schema.safeParse(value)
+
+    try {
+      return parsed.success ? format(parsed.data, ...args) : null
+    } catch {
+      return null
+    }
+  }
+
+// Next-step hints go to stderr after the output, so a person reads them last and stdout stays the result
+const hints: Array<{ json: string; human: string | null }> = []
+
+/** `human` replaces the line for a person; null shows nothing, when the text output already says it */
+const hint = (json: string, human: string | null = json) => hints.push({ json, human: human === null ? null : printable(human) })
+
+// JSON.stringify escapes C0 control characters but not DEL and C1; a person's terminal would interpret those
+// oxlint-disable-next-line no-control-regex -- matching control characters is the purpose of this expression
+const escapeC1 = (json: string) => json.replace(/[\u007f-\u009f]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+
+// With --json: one JSON document for agents. Without it: text for a person, or indented JSON where a command has no text form
+function out<Args extends unknown[]>(value: unknown, render: Render<Args> | undefined, args: Args) {
+  const json = program.opts().json
+
+  console.log(json ? JSON.stringify(value) : ((unchecked ? null : render?.(value, ...args)) ?? escapeC1(JSON.stringify(value, null, 2))))
+
+  for (const line of hints.splice(0)) {
+    if (json) console.error(line.json)
+    else if (line.human !== null) console.error(text.dim(line.human))
+  }
 }
 
 // What an agent must do on 401. It is in the error itself, so an agent without the skill also knows to sign the user in
@@ -187,25 +222,28 @@ const SIGN_IN_STEPS =
 
 const interactive = () => !program.opts().json && Boolean(process.stdin.isTTY && process.stderr.isTTY)
 
-function run<Args extends unknown[]>(fn: (...args: Args) => Promise<unknown>) {
+function run<Args extends unknown[]>(fn: (...args: Args) => Promise<unknown>, render?: Render<Args>) {
   return async (...args: Args) => {
     try {
       try {
-        out(await fn(...args))
+        out(await fn(...args), render, args)
       } catch (e) {
         // A person in a terminal is taken through the browser confirmation and gets the answer, instead of an error to act on
         if (!(e instanceof ApiError && e.status === 401 && interactive())) throw e
         const device = await startLogin()
         console.error(`Sign-in needed. Open ${verificationUrl(device.userCode)} and confirm the code ${device.userCode}`)
         await waitLogin(device)
-        out(await fn(...args))
+        console.error(text.signedIn({ signedIn: true }))
+        out(await fn(...args), render, args)
       }
     } catch (e) {
+      hints.length = 0
       const message = e instanceof Error ? e.message : 'Unknown error'
       const status = e instanceof ApiError ? e.status : 1
       const code = e instanceof ApiError ? e.code : undefined
-      // On 401 the CLI's own steps win: they say how to sign in from an agent, which the service cannot know
-      const nextStep = status === 401 ? SIGN_IN_STEPS : e instanceof ApiError ? e.nextStep : undefined
+      // On 401 the CLI's own steps win: they say how to sign in from an agent, which the service cannot know. A person runs login
+      const signIn = program.opts().json ? SIGN_IN_STEPS : `sign in with ${cmd()} login, then repeat this command`
+      const nextStep = status === 401 ? signIn : e instanceof ApiError ? e.nextStep : undefined
 
       if (program.opts().json) console.log(JSON.stringify({ error: { message, status, ...(code ? { code } : {}), ...(nextStep ? { nextStep } : {}) } }))
       else {
@@ -240,6 +278,22 @@ const updateCommand = /[\\/]pnpm[\\/]global[\\/]/.test(packageRoot)
   : /[\\/]\.bun[\\/]install[\\/]global[\\/]/.test(packageRoot)
     ? 'bun add -g @giftsofprometheus/cli@latest'
     : 'npm install -g @giftsofprometheus/cli@latest'
+
+// The command a person typed, so a hint can be pasted back as is
+const detectedLauncher = /[\\/]_npx[\\/]/.test(packageRoot)
+  ? 'npx @giftsofprometheus/cli'
+  : /[\\/]bunx-[^\\/]*[\\/]/.test(packageRoot)
+    ? 'bunx @giftsofprometheus/cli'
+    : /[\\/]dlx[\\/]/.test(packageRoot)
+      ? 'pnpm dlx @giftsofprometheus/cli'
+      : 'giftsofprometheus'
+
+// --json output keeps the commands it has always named: agents follow them, and the skill says how to run the CLI
+const jsonLauncher = /[\\/]_npx[\\/]/.test(packageRoot) ? 'npx @giftsofprometheus/cli' : 'giftsofprometheus'
+
+const cmd = () => (program.opts().json ? jsonLauncher : detectedLauncher)
+
+const context = { launcher: detectedLauncher, base }
 
 const shortPath = (path: string) => (path.startsWith(homedir()) ? '~' + path.slice(homedir().length) : path)
 
@@ -463,6 +517,8 @@ async function login(options: { start?: boolean; wait?: boolean }) {
 
   console.error(`Open ${verificationUrl(device.userCode)} and confirm the code ${device.userCode}`)
 
+  if (!program.opts().json) console.error(text.dim('Waiting for the confirmation…'))
+
   return waitLogin(device)
 }
 
@@ -545,78 +601,90 @@ program
   .description('Authorize this CLI in a browser')
   .option('--start', 'print the confirmation link and code, then exit; finish with login --wait')
   .option('--wait', 'wait for the confirmation of a login started with --start')
-  .action(run(login))
+  .action(
+    run(login, value => {
+      const prompt = text.loginPromptSchema.safeParse(value)
+
+      return prompt.success ? text.loginPrompt(context, prompt.data) : view(text.signedInSchema, text.signedIn)(value)
+    })
+  )
 
 program
   .command('logout')
   .description('Revoke this CLI session')
   .action(
-    run(async () => {
-      const saved = await storedAny()
+    run(
+      async () => {
+        const saved = await storedAny()
 
-      // The session in an unreadable file cannot be revoked from here, and deleting the file would hide that it may still be valid
-      if (saved === 'unreadable')
-        throw new ApiError(
-          `Cannot read ${credentials}, so this session was not revoked. Disconnect the device on ${new URL('/account', base)}, then delete the file`
-        )
+        // The session in an unreadable file cannot be revoked from here, and deleting the file would hide that it may still be valid
+        if (saved === 'unreadable')
+          throw new ApiError(
+            `Cannot read ${credentials}, so this session was not revoked. Disconnect the device on ${new URL('/account', base)}, then delete the file`
+          )
 
-      // A session issued by another service is neither revoked nor deleted: removing the file would leave that session valid
-      if (saved && saved.base !== base) throw new ApiError(`The stored session belongs to ${saved.base}; run logout with GIFTSOFPROMETHEUS_URL=${saved.base}`)
+        // A session issued by another service is neither revoked nor deleted: removing the file would leave that session valid
+        if (saved && saved.base !== base) throw new ApiError(`The stored session belongs to ${saved.base}; run logout with GIFTSOFPROMETHEUS_URL=${saved.base}`)
 
-      if (!saved) return { signedOut: true }
+        if (!saved) return { signedOut: true }
 
-      try {
-        await request('/api/account/logout', 'POST')
-      } catch (e) {
-        if (!(e instanceof ApiError) || e.status !== 401) throw e
-      }
+        try {
+          await request('/api/account/logout', 'POST')
+        } catch (e) {
+          if (!(e instanceof ApiError) || e.status !== 401) throw e
+        }
 
-      await unlink(credentials).catch(() => {})
+        await unlink(credentials).catch(() => {})
 
-      return { signedOut: true }
-    })
+        return { signedOut: true }
+      },
+      () => 'Signed out.'
+    )
   )
 
 program
   .command('whoami')
   .description('Show the current account')
-  .action(run(() => request('/api/account/me')))
+  .action(run(() => request('/api/account/me'), view(text.accountSchema, text.account)))
 
 program
   .command('doctor')
   .description('Check configuration, server and authorization')
   .action(
-    run(async () => {
-      const credential = await stored()
+    run(
+      async () => {
+        const credential = await stored()
 
-      let reachable = false,
-        authenticated = false
+        let reachable = false,
+          authenticated = false
 
-      try {
-        await request('/api/knowledge/talks', 'GET', undefined, false)
-        reachable = true
+        try {
+          await request('/api/knowledge/talks', 'GET', undefined, false)
+          reachable = true
 
-        if (credential) {
-          await request('/api/account/me')
-          authenticated = true
+          if (credential) {
+            await request('/api/account/me')
+            authenticated = true
+          }
+        } catch {}
+
+        const latest = installed && !updateCheckDisabled() ? (await latestVersion(true)).latest : null
+        const skills = await installedSkills().catch(() => [])
+
+        return {
+          base,
+          reachable,
+          authenticated,
+          authSource: credential ? 'config' : 'missing',
+          configPath: credentials,
+          // `installed: false` for npx and source runs: they already use the version they asked for
+          update: { installed, current: version, latest, available: Boolean(installed && latest && newerVersion(latest, version)), command: updateCommand },
+          skills: skills.map(skill => ({ path: skill.path, status: skill.status, version: skill.version })),
+          nextStep: !reachable ? 'Check GIFTSOFPROMETHEUS_URL and server availability' : !authenticated ? 'Run giftsofprometheus login' : null,
         }
-      } catch {}
-
-      const latest = installed && !updateCheckDisabled() ? (await latestVersion(true)).latest : null
-      const skills = await installedSkills().catch(() => [])
-
-      return {
-        base,
-        reachable,
-        authenticated,
-        authSource: credential ? 'config' : 'missing',
-        configPath: credentials,
-        // `installed: false` for npx and source runs: they already use the version they asked for
-        update: { installed, current: version, latest, available: Boolean(installed && latest && newerVersion(latest, version)), command: updateCommand },
-        skills: skills.map(skill => ({ path: skill.path, status: skill.status, version: skill.version })),
-        nextStep: !reachable ? 'Check GIFTSOFPROMETHEUS_URL and server availability' : !authenticated ? 'Run giftsofprometheus login' : null,
-      }
-    })
+      },
+      view(text.doctorSchema, value => text.doctor(context, value))
+    )
   )
 
 program
@@ -632,20 +700,23 @@ program
   .option('--limit <n>', 'maximum number of talks (1-20)')
   .option('--per-talk <n>', 'maximum passages per talk (1-3)')
   .action(
-    run((query: string, options: { q: string[]; limit?: string; perTalk?: string }) => {
-      const queries = askQueries([query, ...options.q])
+    run(
+      (query: string, options: { q: string[]; limit?: string; perTalk?: string }) => {
+        const queries = askQueries([query, ...options.q])
 
-      const number = z.string().regex(/^\d+$/)
-      const params = new URLSearchParams()
+        const number = z.string().regex(/^\d+$/)
+        const params = new URLSearchParams()
 
-      for (const value of queries) params.append('q', value)
+        for (const value of queries) params.append('q', value)
 
-      if (options.limit !== undefined) params.set('limit', number.parse(options.limit))
+        if (options.limit !== undefined) params.set('limit', number.parse(options.limit))
 
-      if (options.perTalk !== undefined) params.set('perTalk', number.parse(options.perTalk))
+        if (options.perTalk !== undefined) params.set('perTalk', number.parse(options.perTalk))
 
-      return request(`/api/knowledge/passages?${params}`)
-    })
+        return request(`/api/knowledge/passages?${params}`)
+      },
+      view(text.passagesSchema, value => text.passages(context, value))
+    )
   )
 
 /** The service takes one to three texts of up to 200 characters; a plain message tells an agent what to drop */
@@ -676,90 +747,128 @@ const talks = program.command('talks').description('Browse talks')
 
 talks
   .command('list')
+  .description('List published talks, page by page')
   .option('--page <page>', 'page number', '1')
-  .action(run((options: { page: string }) => request(`/api/knowledge/talks?page=${encodeURIComponent(options.page)}`, 'GET', undefined, false)))
+  .action(
+    run(
+      (options: { page: string }) => request(`/api/knowledge/talks?page=${encodeURIComponent(options.page)}`, 'GET', undefined, false),
+      view(text.pageSchema, value => text.talkPage(context, value, page => `talks list --page ${page}`, 'No talks on this page.'))
+    )
+  )
 
 talks
   .command('search')
+  .description('Search published talks by title, summary, speaker or topic')
   .argument('<query>')
   .option('--page <page>', 'page number', '1')
   .action(
-    run((query: string, options: { page: string }) => {
-      // The service answers an empty query with the whole catalog, which an agent would take for search results
-      if (!query.trim()) throw new ApiError('Empty search query. To browse the catalog, use: giftsofprometheus talks list')
+    run(
+      (query: string, options: { page: string }) => {
+        // The service answers an empty query with the whole catalog, which an agent would take for search results
+        if (!query.trim()) throw new ApiError('Empty search query. To browse the catalog, use: giftsofprometheus talks list')
 
-      return request(`/api/knowledge/talks?q=${encodeURIComponent(query)}&page=${encodeURIComponent(options.page)}`)
-    })
+        return request(`/api/knowledge/talks?q=${encodeURIComponent(query)}&page=${encodeURIComponent(options.page)}`)
+      },
+      view(text.pageSchema, (value, query: string) =>
+        text.talkPage(
+          context,
+          // Search is public: with an expired session the service answers it as anonymous and accepts that recId only from
+          // the site, and the response does not say which it was. A person opens a found talk without one
+          { ...value, recId: undefined },
+          page => `talks search --page ${page} -- ${shellQuote(query)}`,
+          `Nothing found. Search the transcripts instead: ${cmd()} ask -- ${shellQuote(query)}`
+        )
+      )
+    )
   )
-
-// The command a person typed, so a hint can be pasted back as is
-const launcher = /[\\/]_npx[\\/]/.test(packageRoot) ? 'npx @giftsofprometheus/cli' : 'giftsofprometheus'
 
 talks
   .command('get')
+  .description('Show one talk: summary, speakers, topics and links')
   .argument('<slug-or-id>')
   .action(
-    run(async (id: string) => {
-      const talk = await resolveTalk(id)
-      // The next step after the summary is the transcript; stdout stays the talk's JSON
-      const signedIn = Boolean(await stored())
-      console.error(`Next: the full transcript — ${launcher} talks content ${talk.slug}${signedIn ? '' : ' (asks you to sign in in the browser first)'}`)
+    run(
+      async (id: string) => {
+        const talk = await resolveTalk(id)
+        // The next step after the summary is the transcript; stdout stays the talk's JSON
+        const signedIn = Boolean(await stored())
+        hint(`Next: the full transcript — ${cmd()} talks content ${talk.slug}${signedIn ? '' : ' (asks you to sign in in the browser first)'}`)
 
-      return talk
-    })
+        return talk
+      },
+      view(text.talkSchema, value => text.talkDetails(context, value))
+    )
   )
 
 talks
   .command('content')
+  .description('Read the transcript with chapters and timestamps; requires login')
   .argument('<slug-or-id>')
   .option('--rec-id <recId>', 'recId of the list the talk came from (feed, search or similar)')
   .option('--from <time>', 'keep transcript segments that start at or after this time: seconds, m:ss or h:mm:ss')
   .option('--to <time>', 'keep transcript segments that start before this time')
   .option('--outline', 'speakers, chapters and publication without the transcript')
   .action(
-    run(async (id: string, options: { recId?: string; from?: string; to?: string; outline?: boolean }) => {
-      const query = recIdQuery(options.recId)
-      const from = options.from === undefined ? 0 : seconds(options.from) * 1000
-      const to = options.to === undefined ? Infinity : seconds(options.to) * 1000
+    run(
+      async (id: string, options: { recId?: string; from?: string; to?: string; outline?: boolean }) => {
+        const query = recIdQuery(options.recId)
+        const from = options.from === undefined ? 0 : seconds(options.from) * 1000
+        const to = options.to === undefined ? Infinity : seconds(options.to) * 1000
 
-      if (from >= to) throw new ApiError('--from must be earlier than --to')
-      const talk = await resolveTalk(id)
-      const raw = await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/content${query}`, 'POST')
-      const whole = !options.outline && options.from === undefined && options.to === undefined
-      const content = whole ? null : contentShape.parse(raw)
+        if (from >= to) throw new ApiError('--from must be earlier than --to')
+        const talk = await resolveTalk(id)
+        const raw = await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/content${query}`, 'POST')
+        const whole = !options.outline && options.from === undefined && options.to === undefined
+        const parsed = whole ? null : contentShape.safeParse(raw)
 
-      // A range keeps the chapters, so an agent still sees where it is in the talk
-      const result =
-        content === null
-          ? raw
-          : options.outline
-            ? { ...content, transcript: undefined, transcriptSegments: content.transcript.length }
-            : { ...content, transcript: content.transcript.filter(segment => segment.startMs >= from && segment.startMs < to) }
+        if (parsed && !parsed.success) {
+          if (program.opts().json) throw parsed.error
+          unchecked = true
+        }
 
-      // After the transcript: talks like this one, or saving it if the user found it useful
-      console.error(`Next: similar talks — ${launcher} talks similar ${talk.slug}; save it if the user asks — ${launcher} favorites add ${talk.slug}`)
+        const content = parsed?.success ? parsed.data : null
 
-      return result
-    })
+        // A range keeps the chapters, so an agent still sees where it is in the talk
+        const result =
+          content === null
+            ? raw
+            : options.outline
+              ? { ...content, transcript: undefined, transcriptSegments: content.transcript.length }
+              : { ...content, transcript: content.transcript.filter(segment => segment.startMs >= from && segment.startMs < to) }
+
+        // After the transcript: talks like this one, or saving it if the user found it useful
+        hint(
+          `Next: similar talks — ${cmd()} talks similar ${talk.slug}; save it if the user asks — ${cmd()} favorites add ${talk.slug}`,
+          `Next: similar talks — ${cmd()} talks similar ${talk.slug}; save to favorites — ${cmd()} favorites add ${talk.slug}${options.recId ? ` --rec-id ${options.recId}` : ''}`
+        )
+
+        return result
+      },
+      (value, _, options: { outline?: boolean }) => view(options.outline ? text.outlineSchema : text.contentSchema, text.transcript)(value)
+    )
   )
 
 talks
   .command('similar')
+  .description('Up to four talks like this one, each with a reason')
   .argument('<slug-or-id>')
   .action(
-    run(async (id: string) => {
-      const talk = await resolveTalk(id)
+    run(
+      async (id: string) => {
+        const talk = await resolveTalk(id)
 
-      // Public; with a session the list gets a recId, and each item's contentUrl carries it
-      const result = z
-        .object({ recId: z.string().optional() })
-        .loose()
-        .parse(await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/similar`))
+        // Public; with a session the list gets a recId, and each item's contentUrl carries it
+        const result = z
+          .object({ recId: z.string().optional() })
+          .loose()
+          .parse(await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/similar`))
 
-      if (result.recId) console.error(`Next: open one with ${launcher} talks content <slug> --rec-id ${result.recId}`)
+        if (result.recId) hint(`Next: open one with ${cmd()} talks content <slug> --rec-id ${result.recId}`, null)
 
-      return result
-    })
+        return result
+      },
+      view(text.listSchema, value => text.talkList(context, value, 'No similar talks yet.'))
+    )
   )
 
 const reactionTypes = { like: 'like', dislike: 'dislike', 'not-interested': 'not_interested', clear: 'clear_reaction' } as const
@@ -771,37 +880,67 @@ talks
   .argument('<reaction>', Object.keys(reactionTypes).join(' | '))
   .option('--rec-id <recId>', 'recId of the list the talk came from')
   .action(
-    run(async (id: string, reaction: string, options: { recId?: string }) => {
-      const type = z.enum(['like', 'dislike', 'not-interested', 'clear']).parse(reaction)
+    run(
+      async (id: string, reaction: string, options: { recId?: string }) => {
+        const type = z.enum(['like', 'dislike', 'not-interested', 'clear']).parse(reaction)
 
-      return event(id, reactionTypes[type], options.recId)
-    })
+        return event(id, reactionTypes[type], options.recId)
+      },
+      (_, id: string, reaction: string) =>
+        reaction === 'clear' ? `Cleared the reaction to ${printable(id)}.` : `Recorded: ${printable(reaction)} for ${printable(id)}.`
+    )
   )
 
 const favorites = program.command('favorites').description('Manage bookmarks')
 
 favorites
   .command('list')
+  .description('List saved talks')
   .option('--page <page>', 'page number', '1')
   .option('--limit <limit>', 'page size, max 50', '20')
   .action(
-    run((o: { page: string; limit: string }) => request(`/api/knowledge/favorites?page=${encodeURIComponent(o.page)}&limit=${encodeURIComponent(o.limit)}`))
+    run(
+      (o: { page: string; limit: string }) => request(`/api/knowledge/favorites?page=${encodeURIComponent(o.page)}&limit=${encodeURIComponent(o.limit)}`),
+      view(text.pageSchema, (value, o: { page: string; limit: string }) =>
+        text.talkPage(
+          context,
+          value,
+          page => `favorites list --page ${page} --limit ${shellQuote(o.limit)}`,
+          `No favorites yet. Save a talk with: ${cmd()} favorites add <slug>`
+        )
+      )
+    )
   )
 
 favorites
   .command('add')
+  .description('Save a talk to favorites')
   .argument('<slug-or-id>')
   .option('--rec-id <recId>', 'recId of the list the talk came from')
-  .action(run((id: string, options: { recId?: string }) => event(id, 'bookmark', options.recId)))
+  .action(
+    run(
+      (id: string, options: { recId?: string }) => event(id, 'bookmark', options.recId),
+      (_, id: string) => `Saved ${printable(id)} to favorites.`
+    )
+  )
 
 favorites
   .command('remove')
+  .description('Remove a talk from favorites')
   .argument('<slug-or-id>')
-  .action(run((id: string) => event(id, 'unbookmark')))
+  .action(
+    run(
+      (id: string) => event(id, 'unbookmark'),
+      (_, id: string) => `Removed ${printable(id)} from favorites.`
+    )
+  )
 
 const profile = program.command('profile').description('Read or update interests')
 
-profile.command('get').action(run(() => request('/api/knowledge/profile')))
+profile
+  .command('get')
+  .description('Show interests and the current task')
+  .action(run(() => request('/api/knowledge/profile'), view(text.profileSchema, text.profile)))
 
 const levels = z.enum(['high', 'interested', 'not_interested'])
 
@@ -839,7 +978,7 @@ profile
   .option('--interest <topic=level>', 'set a topic to high, interested or not_interested; repeatable', collect, [])
   .option('--remove-interest <topic>', 'remove a topic; repeatable', collect, [])
   .option('--query-text <text>', 'replace the current task; an empty string clears it')
-  .action(run(updateProfile))
+  .action(run(updateProfile, () => `Profile updated. See it with: ${cmd()} profile get`))
 
 const draftLevels = z.enum(['interested', 'not_interested'])
 
@@ -972,10 +1111,12 @@ onboarding
   .command('topics')
   .description('List topics to match interests against; no account needed')
   .action(
-    run(async () =>
-      z
-        .object({ topics: z.array(z.object({ slug: z.string(), title: z.string(), section: z.string().nullable() })) })
-        .parse(await request('/api/knowledge/topics', 'GET', undefined, false))
+    run(
+      async () =>
+        z
+          .object({ topics: z.array(z.object({ slug: z.string(), title: z.string(), section: z.string().nullable() })) })
+          .parse(await request('/api/knowledge/topics', 'GET', undefined, false)),
+      view(text.topicsSchema, text.topicTree)
     )
   )
 
@@ -984,24 +1125,39 @@ onboarding
   .description('Start a new draft from topic choices and get up to 8 numbered talks to judge; no account needed')
   .option('--interest <topic=level>', 'set a topic to interested or not_interested; repeatable', collect, [])
   .option('--query-text <text>', 'what the user is working on now; saved with the draft on finish')
-  .action(run(onboardingDeck))
+  .action(
+    run(
+      onboardingDeck,
+      view(text.deckSchema, value => text.deck(context, value))
+    )
+  )
 
 onboarding
   .command('react')
   .description('Judge deck cards by number and get the recommendations they lead to; no account needed')
   .argument('<answers...>', 'card=like|dislike|skip, e.g. 1=like 3=dislike')
-  .action(run(onboardingReact))
+  .action(
+    run(
+      onboardingReact,
+      view(text.previewSchema, value => text.preview(context, value))
+    )
+  )
 
 onboarding
   .command('finish')
   .description('Save the draft to the signed-in account')
   .option('--query-text <text>', 'replace the query text kept in the draft')
-  .action(run(onboardingFinish))
+  .action(run(onboardingFinish, () => `Saved to your account. Recommendations: ${cmd()} feed`))
 
 program
   .command('feed')
   .description('Get personalized recommendations')
-  .action(run(() => request('/api/knowledge/feed')))
+  .action(
+    run(
+      () => request('/api/knowledge/feed'),
+      view(text.listSchema, value => text.talkList(context, value, `No recommendations yet. Build a profile with: ${cmd()} onboarding topics`))
+    )
+  )
 
 program
   .command('request')
@@ -1021,7 +1177,12 @@ skill
   .command('update')
   .description('Replace installed copies of the skill that are older than this CLI; a custom description is kept')
   .option('--force', 'also replace copies that were edited by hand')
-  .action(run((options: { force?: boolean }) => updateSkills(Boolean(options.force))))
+  .action(
+    run(
+      (options: { force?: boolean }) => updateSkills(Boolean(options.force)),
+      view(text.skillUpdateSchema, value => text.skillUpdate(context, value))
+    )
+  )
 
 const profileTopics = z.object({
   interests: z.array(z.object({ topic: z.string().optional(), level: z.enum(['high', 'interested', 'not_interested']) })),
@@ -1086,7 +1247,7 @@ async function personalizeSkill(o: { file: string }) {
       path: file,
       topics,
       reason: e instanceof Error ? e.message : 'Write failed',
-      command: `${launcher} skill personalize --file ${shellQuote(file)}`,
+      command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
     }
   }
 
@@ -1097,7 +1258,7 @@ skill
   .command('personalize')
   .description("Add the user's topics (ten words at most) to the description of the skill copy at --file; requires login")
   .requiredOption('--file <path>', 'SKILL.md of the loaded skill, or its folder')
-  .action(run(personalizeSkill))
+  .action(run(personalizeSkill, view(text.personalizeSchema, text.personalize)))
 
 // The daily check runs after the command, so it never delays or breaks its output; doctor and skill report the same state themselves
 let skipNotice = false

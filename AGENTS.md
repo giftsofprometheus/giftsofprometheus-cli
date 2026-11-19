@@ -21,6 +21,7 @@ Use pnpm. `pnpm check` runs lint (oxlint with the quality plugin), formatting (o
 - The CLI calls only the public API prefixes listed in `publicApi` in `src/index.ts`. Do not add internal service endpoints, admin routes or hosts other than the configured origin.
 - The `User-Agent` stays `giftsofprometheus/<version>`: the service recognizes the CLI by this prefix when it names the device on the account page.
 - Never log, print or include the stored session token in errors.
+- Without `--json` a command prints text for a person through a renderer in `src/render.ts`; the renderer checks the shape with zod and falls back to indented JSON, so a service change never breaks a command. `request` stays JSON. Server text goes through `printable` before it reaches the terminal.
 - `--json` output is a contract for agents: one JSON document on stdout, errors as `{"error":{"message","status","code"?,"nextStep"?}}` with exit code 1. `code` is the service's stable error code, and agents decide by it. Keep it stable.
 - Commands that change the user's data (`favorites add/remove`, `profile update`) run only on an explicit command. Do not add side effects to read commands.
 
