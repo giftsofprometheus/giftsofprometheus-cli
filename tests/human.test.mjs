@@ -53,7 +53,7 @@ const routes = {
   'GET /api/knowledge/feed': { recId, items: [{ ...talk, reason: 'Похоже на ваши интересы' }] },
   'GET /api/knowledge/raw': { text: 'a\u009b31mb' },
   'GET /api/knowledge/talks/evil': { ...talk, id: 8, slug: 'ev\u009b31mil' },
-  'POST /api/knowledge/talks/renamed/content': { title: 'Renamed', speakers: [], chapters: [], segments: [] },
+  'POST /api/knowledge/talks/renamed/content': { title: 'Renamed', speakers: [], chapters: [], segments: [], transcriptSegments: 5 },
   'GET /api/knowledge/talks/renamed': { ...talk, id: 9, slug: 'renamed' },
   'GET /api/knowledge/talks?q=broken&page=1': { items: [{ ...talk, slug: '\ud800' }], page: 1, totalPages: 1 },
 }
@@ -102,8 +102,6 @@ test('without --json commands print text for a person; with --json the same comm
     // The agent contract is unchanged: doctor names the plain command, talks content keeps its hint
     assert.equal(JSON.parse((await h.cli(['--json', 'doctor'])).stdout).nextStep, 'Run giftsofprometheus login')
 
-    // The service takes the recId of an anonymous list only from the site, so a signed-out search does not offer it
-    assert.doesNotMatch((await h.cli(['talks', 'search', '--', '-foo'])).stdout, /--rec-id/)
     const login = await h.cli(['login'])
     assert.equal(login.code, 0, login.stderr)
     assert.equal(login.stdout, 'Signed in. The session lasts 30 days.\n')
@@ -139,11 +137,12 @@ test('without --json commands print text for a person; with --json the same comm
     // Next-page commands keep the query after `--` and the page size; lists with a recId show how to pass it on
     const search = await h.cli(['talks', 'search', '--', '-foo'])
     assert.match(search.stdout, /next: giftsofprometheus talks search --page 2 -- '-foo'\n/)
-    assert.match(search.stdout, new RegExp(`talks content <slug> --rec-id ${recId}\\n.*favorites add <slug> --rec-id ${recId}\\n$`))
+    // Search is public: with an expired session its recId is an anonymous one, which the service accepts only from the site
+    assert.doesNotMatch(search.stdout, /--rec-id/)
     assert.match((await h.cli(['favorites', 'list', '--limit', '1'])).stdout, /next: giftsofprometheus favorites list --page 2 --limit '1'\n/)
     const feed = await h.cli(['feed'])
     assert.match(feed.stdout, /Why: Похоже на ваши интересы/)
-    assert.match(feed.stdout, new RegExp(`--rec-id ${recId}`))
+    assert.match(feed.stdout, new RegExp(`talks content <slug> --rec-id ${recId}\\n.*favorites add <slug> --rec-id ${recId}\\n$`))
 
     // Server text never reaches the terminal with control characters: the JSON fallback escapes them, hints drop them
     const raw = await h.cli(['request', '/api/knowledge/raw'])
@@ -174,27 +173,41 @@ test('without --json commands print text for a person; with --json the same comm
   }
 })
 
-test('hints name the launcher that ran the CLI for a person; --json keeps the plain command', async () => {
-  // The layout bunx leaves in its cache: <tmp>/bunx-<uid>-<package>/node_modules/@giftsofprometheus/cli
-  const cache = await mkdtemp(join(tmpdir(), 'giftsofprometheus-launcher-'))
-  const packageRoot = join(cache, 'bunx-1000-@giftsofprometheus', 'cli@latest', 'node_modules', '@giftsofprometheus', 'cli')
+// Copies the package to where a launcher keeps it, so the CLI sees the same path as when that launcher runs it
+async function launched(...path) {
+  const packageRoot = join(await mkdtemp(join(tmpdir(), 'giftsofprometheus-launcher-')), ...path, 'node_modules', '@giftsofprometheus', 'cli')
   const source = fileURLToPath(new URL('../', import.meta.url))
   await mkdir(packageRoot, { recursive: true })
 
   for (const entry of ['dist', 'skills', 'package.json']) await cp(join(source, entry), join(packageRoot, entry), { recursive: true })
   await symlink(join(source, 'node_modules'), join(packageRoot, 'node_modules'))
-  const h = await harness(join(packageRoot, 'dist', 'index.js'))
+
+  return harness(join(packageRoot, 'dist', 'index.js'))
+}
+
+test('hints name the launcher that ran the CLI for a person; --json keeps the plain command', async () => {
+  // The layout bunx leaves in its cache: <tmp>/bunx-<uid>-<package>/node_modules/@giftsofprometheus/cli
+  const bunx = await launched('bunx-1000-@giftsofprometheus', 'cli@latest')
 
   try {
     assert.match(
-      (await h.cli(['talks', 'get', 'agents-building-agents'])).stderr,
+      (await bunx.cli(['talks', 'get', 'agents-building-agents'])).stderr,
       /^Next: the full transcript — bunx @giftsofprometheus\/cli talks content agents-building-agents/
     )
     assert.equal(
-      (await h.cli(['--json', 'talks', 'get', 'agents-building-agents'])).stderr,
+      (await bunx.cli(['--json', 'talks', 'get', 'agents-building-agents'])).stderr,
       'Next: the full transcript — giftsofprometheus talks content agents-building-agents (asks you to sign in in the browser first)\n'
     )
   } finally {
-    await h.close()
+    await bunx.close()
+  }
+
+  const npx = await launched('_npx', '0123abcd')
+
+  try {
+    assert.equal(JSON.parse((await npx.cli(['--json', 'doctor'])).stdout).nextStep, 'Run giftsofprometheus login')
+    assert.match((await npx.cli(['doctor'])).stdout, /Next: run npx @giftsofprometheus\/cli login\n$/)
+  } finally {
+    await npx.close()
   }
 })

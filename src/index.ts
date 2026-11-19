@@ -107,11 +107,8 @@ async function readState<T>(file: string, schema: z.ZodType<T & { base: string }
   }
 }
 
-// Whether a request of this run carried the session; the service accepts the recId of an anonymous list only from the site
-let sentSession = false
-
-/** Drops the recId from the text form when the list was delivered without a session */
-const attributed = <T extends { recId?: string }>(value: T): T => (sentSession ? value : { ...value, recId: undefined })
+// Set when a command returns a response it could not check; the text form then shows it as JSON instead of reading it
+let unchecked = false
 
 async function request(path: string, method = 'GET', body?: unknown, authenticated = true): Promise<unknown> {
   if (!path.startsWith('/') || path.includes('\\'))
@@ -126,10 +123,7 @@ async function request(path: string, method = 'GET', body?: unknown, authenticat
   const credential = authenticated ? await stored() : null
   const headers = new Headers({ 'Content-Type': 'application/json', 'X-Knowledge-Client': 'agent', 'User-Agent': `giftsofprometheus/${version}` })
 
-  if (credential) {
-    headers.set('Authorization', `Bearer ${credential.token}`)
-    sentSession = true
-  }
+  if (credential) headers.set('Authorization', `Bearer ${credential.token}`)
 
   for (let attempt = 1; ; attempt++) {
     let response: Response
@@ -214,7 +208,7 @@ const escapeC1 = (json: string) => json.replace(/[\u007f-\u009f]/g, c => `\\u${c
 function out<Args extends unknown[]>(value: unknown, render: Render<Args> | undefined, args: Args) {
   const json = program.opts().json
 
-  console.log(json ? JSON.stringify(value) : (render?.(value, ...args) ?? escapeC1(JSON.stringify(value, null, 2))))
+  console.log(json ? JSON.stringify(value) : ((unchecked ? null : render?.(value, ...args)) ?? escapeC1(JSON.stringify(value, null, 2))))
 
   for (const line of hints.splice(0)) {
     if (json) console.error(line.json)
@@ -686,10 +680,10 @@ program
           // `installed: false` for npx and source runs: they already use the version they asked for
           update: { installed, current: version, latest, available: Boolean(installed && latest && newerVersion(latest, version)), command: updateCommand },
           skills: skills.map(skill => ({ path: skill.path, status: skill.status, version: skill.version })),
-          nextStep: !reachable ? 'Check GIFTSOFPROMETHEUS_URL and server availability' : !authenticated ? `Run ${cmd()} login` : null,
+          nextStep: !reachable ? 'Check GIFTSOFPROMETHEUS_URL and server availability' : !authenticated ? 'Run giftsofprometheus login' : null,
         }
       },
-      view(text.doctorSchema, text.doctor)
+      view(text.doctorSchema, value => text.doctor(context, value))
     )
   )
 
@@ -778,7 +772,9 @@ talks
       view(text.pageSchema, (value, query: string) =>
         text.talkPage(
           context,
-          attributed(value),
+          // Search is public: with an expired session the service answers it as anonymous and accepts that recId only from
+          // the site, and the response does not say which it was. A person opens a found talk without one
+          { ...value, recId: undefined },
           page => `talks search --page ${page} -- ${shellQuote(query)}`,
           `Nothing found. Search the transcripts instead: ${cmd()} ask -- ${shellQuote(query)}`
         )
@@ -825,7 +821,11 @@ talks
         const whole = !options.outline && options.from === undefined && options.to === undefined
         const parsed = whole ? null : contentShape.safeParse(raw)
 
-        if (parsed && !parsed.success && program.opts().json) throw parsed.error
+        if (parsed && !parsed.success) {
+          if (program.opts().json) throw parsed.error
+          unchecked = true
+        }
+
         const content = parsed?.success ? parsed.data : null
 
         // A range keeps the chapters, so an agent still sees where it is in the talk
@@ -867,7 +867,7 @@ talks
 
         return result
       },
-      view(text.listSchema, value => text.talkList(context, attributed(value), 'No similar talks yet.'))
+      view(text.listSchema, value => text.talkList(context, value, 'No similar talks yet.'))
     )
   )
 

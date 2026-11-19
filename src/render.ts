@@ -250,7 +250,7 @@ export const doctorSchema = z.object({
   nextStep: z.string().nullable(),
 })
 
-export function doctor(value: z.infer<typeof doctorSchema>) {
+export function doctor(context: Context, value: z.infer<typeof doctorSchema>) {
   // ok, a problem, or plain information
   const row = (state: boolean | null, label: string, detail: string) => `${state === null ? '  ' : state ? 'ok' : '!!'}  ${label.padEnd(8)}${detail}`
   const cli = value.update.available ? `${value.update.current}; ${value.update.latest} is available: ${value.update.command}` : value.update.current
@@ -266,7 +266,8 @@ export function doctor(value: z.infer<typeof doctorSchema>) {
 
   for (const skill of value.skills) lines.push(row(skill.status !== 'outdated', 'Skill', `${skill.path}: ${skill.status}`))
 
-  if (value.nextStep) lines.push('', `Next: ${value.nextStep}`)
+  // The JSON names the installed command; a person gets the one that ran the CLI
+  if (value.nextStep) lines.push('', `Next: ${value.reachable && !value.authenticated ? `run ${context.launcher} login` : value.nextStep}`)
 
   return lines.join('\n')
 }
