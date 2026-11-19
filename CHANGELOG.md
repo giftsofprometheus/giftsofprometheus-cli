@@ -5,6 +5,9 @@
 - Without `--json` commands print text for a person instead of indented JSON: `login` says it signed in and for how long, `whoami` the email, `doctor` a checklist, talk lists numbered cards with speakers, conference, length, the TL;DR and the page link, and a page footer with the next-page command; `talks get` the summary with topics and links; `talks content` the transcript with chapter headings and timestamps; `ask` passages with timestamps and links; `profile get` interests by level; `favorites add/remove`, `talks react`, `profile update`, `onboarding` and `skill` commands a short line each. `request` still prints JSON. `--json` output is unchanged.
 - `Next:` hints on stderr come after the output, and suggested commands use the launcher that ran the CLI: `npx`, `bunx` or `pnpm dlx`.
 - On 401 without `--json` the hint says to run `login`; the agent sign-in steps stay in `--json` errors.
+- Lists from search, feed, similar and `ask` show the `--rec-id` commands for opening or saving a talk from them; next-page commands keep `--limit` and put the search query after `--`.
+- Text output strips control characters from server text, also in hints; the JSON fallback for `request` and unexpected responses escapes DEL and C1 characters. A response the text form cannot show prints as JSON.
+- `talks get` shows speakers with job titles; `talks`, `favorites` and `profile get` subcommands have help descriptions.
 - `NO_COLOR` turns off bold and dim text.
 - Skill: pass `--json` to every command.
 

@@ -81,28 +81,38 @@ function card(context: Context, talk: Talk, n: number) {
 
 const cards = (context: Context, items: Talk[]) => items.map((talk, i) => card(context, talk, i + 1)).join('\n\n')
 
-export const pageSchema = z.object({ items: z.array(talkSchema), page: z.number(), totalPages: z.number(), total: z.number().optional() })
+const recId = z.uuid().optional()
 
-/** A page of talks with a hint for the next one; `next` is the command without --page */
-export function talkPage(context: Context, value: z.infer<typeof pageSchema>, next: string, empty: string) {
+/** A list with a recId attributes what the user opens or saves from it to that list */
+const opened = (context: Context, id: string | undefined) =>
+  id ? [`open one: ${context.launcher} talks content <slug> --rec-id ${id}`, `save one: ${context.launcher} favorites add <slug> --rec-id ${id}`] : []
+
+export const pageSchema = z.object({ items: z.array(talkSchema), page: z.number(), totalPages: z.number(), total: z.number().optional(), recId })
+
+/** A page of talks with a hint for the next one; `next` builds the command for a page number */
+export function talkPage(context: Context, value: z.infer<typeof pageSchema>, next: (page: number) => string, empty: string) {
   if (!value.items.length) return empty
   const footer = [`Page ${value.page} of ${value.totalPages}${value.total === undefined ? '' : ` · ${value.total} talks`}`]
 
-  if (value.page < value.totalPages) footer.push(`next: ${context.launcher} ${next} --page ${value.page + 1}`)
+  if (value.page < value.totalPages) footer.push(`next: ${context.launcher} ${next(value.page + 1)}`)
 
-  return `${cards(context, value.items)}\n\n${dim(footer.join(' · '))}`
+  return [cards(context, value.items), '', dim(footer.join(' · ')), ...opened(context, value.recId).map(dim)].join('\n')
 }
 
-export const listSchema = z.object({ items: z.array(talkSchema) })
+export const listSchema = z.object({ items: z.array(talkSchema), recId })
 
 export function talkList(context: Context, value: z.infer<typeof listSchema>, empty: string) {
-  return value.items.length ? cards(context, value.items) : empty
+  return value.items.length ? [cards(context, value.items), '', ...opened(context, value.recId).map(dim)].join('\n').trimEnd() : empty
 }
 
 export function talkDetails(context: Context, talk: Talk) {
   const lines = [bold(printable(talk.title))]
 
-  if (meta(talk)) lines.push(dim(printable(meta(talk))))
+  const details = [talk.event?.name, talk.durationMs ? minutes(talk.durationMs) : null].filter(Boolean).join(' · ')
+
+  if (details) lines.push(dim(printable(details)))
+
+  for (const s of talk.speakers) lines.push(dim(printable([s.name, s.jobTitle, s.organization].filter(Boolean).join(', '))))
 
   if (talk.topics.length) lines.push(dim(`Topics: ${printable(talk.topics.map(t => t.title).join(', '))}`))
 
@@ -116,25 +126,22 @@ export function talkDetails(context: Context, talk: Talk) {
 
 const chapter = z.object({ title: z.string(), startMs: z.number() })
 
-export const contentSchema = z.object({
-  title: z.string(),
-  speakers: z.array(speaker).default([]),
-  chapters: z.array(chapter).default([]),
-  transcript: z.array(z.object({ startMs: z.number(), text: z.string() })).optional(),
-  transcriptSegments: z.number().optional(),
-})
+const contentBase = z.object({ title: z.string(), speakers: z.array(speaker).default([]), chapters: z.array(chapter).default([]) })
+
+export const contentSchema = contentBase.extend({ transcript: z.array(z.object({ startMs: z.number(), text: z.string() })) })
+
+export const outlineSchema = contentBase.extend({ transcriptSegments: z.number() })
 
 /** Transcript lines with a heading where each chapter starts; an outline lists the chapters only */
-export function transcript(value: z.infer<typeof contentSchema>) {
+export function transcript(value: z.infer<typeof contentSchema> | z.infer<typeof outlineSchema>) {
   const lines = [bold(printable(value.title))]
   const names = value.speakers.map(s => [s.name, s.jobTitle, s.organization].filter(Boolean).join(', '))
 
   if (names.length) lines.push(dim(printable(names.join('; '))))
 
-  if (!value.transcript) {
+  if (!('transcript' in value)) {
     lines.push('', ...value.chapters.map(c => `${dim(clock(c.startMs).padStart(8))}  ${printable(c.title)}`))
-
-    if (value.transcriptSegments !== undefined) lines.push('', dim(`${value.transcriptSegments} transcript segments`))
+    lines.push('', dim(`${value.transcriptSegments} transcript segments`))
 
     return lines.join('\n')
   }
@@ -157,6 +164,7 @@ export function transcript(value: z.infer<typeof contentSchema>) {
 }
 
 export const passagesSchema = z.object({
+  recId,
   items: z.array(
     z.object({
       talk: talkSchema,
@@ -165,7 +173,7 @@ export const passagesSchema = z.object({
   ),
 })
 
-export function passages(value: z.infer<typeof passagesSchema>) {
+export function passages(context: Context, value: z.infer<typeof passagesSchema>) {
   if (!value.items.length) return 'Nothing found. Try other wording or another language.'
 
   return value.items
@@ -182,6 +190,7 @@ export function passages(value: z.infer<typeof passagesSchema>) {
 
       return lines.join('\n')
     })
+    .concat(value.recId ? [opened(context, value.recId).map(dim).join('\n')] : [])
     .join('\n\n')
 }
 

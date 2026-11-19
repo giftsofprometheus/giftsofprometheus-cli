@@ -184,21 +184,33 @@ const view =
   (value, ...args) => {
     const parsed = schema.safeParse(value)
 
-    return parsed.success ? format(parsed.data, ...args) : null
+    try {
+      return parsed.success ? format(parsed.data, ...args) : null
+    } catch {
+      return null
+    }
   }
 
 // Next-step hints go to stderr after the output, so a person reads them last and stdout stays the result
-const hints: string[] = []
+const hints: Array<{ json: string; human: string | null }> = []
 
-const hint = (line: string) => hints.push(line)
+/** `human` replaces the line for a person; null shows nothing, when the text output already says it */
+const hint = (json: string, human: string | null = json) => hints.push({ json: printable(json), human: human === null ? null : printable(human) })
+
+// JSON.stringify escapes C0 control characters but not DEL and C1; a person's terminal would interpret those
+// oxlint-disable-next-line no-control-regex -- matching control characters is the purpose of this expression
+const escapeC1 = (json: string) => json.replace(/[\u007f-\u009f]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 
 // With --json: one JSON document for agents. Without it: text for a person, or indented JSON where a command has no text form
 function out<Args extends unknown[]>(value: unknown, render: Render<Args> | undefined, args: Args) {
   const json = program.opts().json
 
-  console.log(json ? JSON.stringify(value) : (render?.(value, ...args) ?? JSON.stringify(value, null, 2)))
+  console.log(json ? JSON.stringify(value) : (render?.(value, ...args) ?? escapeC1(JSON.stringify(value, null, 2))))
 
-  for (const line of hints.splice(0)) console.error(json ? line : text.dim(line))
+  for (const line of hints.splice(0)) {
+    if (json) console.error(line.json)
+    else if (line.human !== null) console.error(text.dim(line.human))
+  }
 }
 
 // What an agent must do on 401. It is in the error itself, so an agent without the skill also knows to sign the user in
@@ -660,7 +672,11 @@ program
           // `installed: false` for npx and source runs: they already use the version they asked for
           update: { installed, current: version, latest, available: Boolean(installed && latest && newerVersion(latest, version)), command: updateCommand },
           skills: skills.map(skill => ({ path: skill.path, status: skill.status, version: skill.version })),
-          nextStep: !reachable ? 'Check GIFTSOFPROMETHEUS_URL and server availability' : !authenticated ? `Run ${launcher} login` : null,
+          nextStep: !reachable
+            ? 'Check GIFTSOFPROMETHEUS_URL and server availability'
+            : !authenticated
+              ? `Run ${program.opts().json ? 'giftsofprometheus' : launcher} login`
+              : null,
         }
       },
       view(text.doctorSchema, text.doctor)
@@ -695,7 +711,7 @@ program
 
         return request(`/api/knowledge/passages?${params}`)
       },
-      view(text.passagesSchema, text.passages)
+      view(text.passagesSchema, value => text.passages(context, value))
     )
   )
 
@@ -727,16 +743,18 @@ const talks = program.command('talks').description('Browse talks')
 
 talks
   .command('list')
+  .description('List published talks, page by page')
   .option('--page <page>', 'page number', '1')
   .action(
     run(
       (options: { page: string }) => request(`/api/knowledge/talks?page=${encodeURIComponent(options.page)}`, 'GET', undefined, false),
-      view(text.pageSchema, value => text.talkPage(context, value, 'talks list', 'No talks on this page.'))
+      view(text.pageSchema, value => text.talkPage(context, value, page => `talks list --page ${page}`, 'No talks on this page.'))
     )
   )
 
 talks
   .command('search')
+  .description('Search published talks by title, summary, speaker or topic')
   .argument('<query>')
   .option('--page <page>', 'page number', '1')
   .action(
@@ -751,8 +769,8 @@ talks
         text.talkPage(
           context,
           value,
-          `talks search ${shellQuote(query)}`,
-          `Nothing found. Search the transcripts instead: ${launcher} ask ${shellQuote(query)}`
+          page => `talks search --page ${page} -- ${shellQuote(query)}`,
+          `Nothing found. Search the transcripts instead: ${launcher} ask -- ${shellQuote(query)}`
         )
       )
     )
@@ -760,6 +778,7 @@ talks
 
 talks
   .command('get')
+  .description('Show one talk: summary, speakers, topics and links')
   .argument('<slug-or-id>')
   .action(
     run(
@@ -777,6 +796,7 @@ talks
 
 talks
   .command('content')
+  .description('Read the transcript with chapters and timestamps; requires login')
   .argument('<slug-or-id>')
   .option('--rec-id <recId>', 'recId of the list the talk came from (feed, search or similar)')
   .option('--from <time>', 'keep transcript segments that start at or after this time: seconds, m:ss or h:mm:ss')
@@ -804,16 +824,20 @@ talks
               : { ...content, transcript: content.transcript.filter(segment => segment.startMs >= from && segment.startMs < to) }
 
         // After the transcript: talks like this one, or saving it if the user found it useful
-        hint(`Next: similar talks — ${launcher} talks similar ${talk.slug}; save to favorites — ${launcher} favorites add ${talk.slug}`)
+        hint(
+          `Next: similar talks — ${launcher} talks similar ${talk.slug}; save it if the user asks — ${launcher} favorites add ${talk.slug}`,
+          `Next: similar talks — ${launcher} talks similar ${talk.slug}; save to favorites — ${launcher} favorites add ${talk.slug}${options.recId ? ` --rec-id ${options.recId}` : ''}`
+        )
 
         return result
       },
-      view(text.contentSchema, text.transcript)
+      (value, _, options: { outline?: boolean }) => view(options.outline ? text.outlineSchema : text.contentSchema, text.transcript)(value)
     )
   )
 
 talks
   .command('similar')
+  .description('Up to four talks like this one, each with a reason')
   .argument('<slug-or-id>')
   .action(
     run(
@@ -826,7 +850,7 @@ talks
           .loose()
           .parse(await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/similar`))
 
-        if (result.recId) hint(`Next: open one with ${launcher} talks content <slug> --rec-id ${result.recId}`)
+        if (result.recId) hint(`Next: open one with ${launcher} talks content <slug> --rec-id ${result.recId}`, null)
 
         return result
       },
@@ -858,17 +882,26 @@ const favorites = program.command('favorites').description('Manage bookmarks')
 
 favorites
   .command('list')
+  .description('List saved talks')
   .option('--page <page>', 'page number', '1')
   .option('--limit <limit>', 'page size, max 50', '20')
   .action(
     run(
       (o: { page: string; limit: string }) => request(`/api/knowledge/favorites?page=${encodeURIComponent(o.page)}&limit=${encodeURIComponent(o.limit)}`),
-      view(text.pageSchema, value => text.talkPage(context, value, 'favorites list', `No favorites yet. Save a talk with: ${launcher} favorites add <slug>`))
+      view(text.pageSchema, (value, o: { page: string; limit: string }) =>
+        text.talkPage(
+          context,
+          value,
+          page => `favorites list --page ${page} --limit ${shellQuote(o.limit)}`,
+          `No favorites yet. Save a talk with: ${launcher} favorites add <slug>`
+        )
+      )
     )
   )
 
 favorites
   .command('add')
+  .description('Save a talk to favorites')
   .argument('<slug-or-id>')
   .option('--rec-id <recId>', 'recId of the list the talk came from')
   .action(
@@ -880,6 +913,7 @@ favorites
 
 favorites
   .command('remove')
+  .description('Remove a talk from favorites')
   .argument('<slug-or-id>')
   .action(
     run(
@@ -890,7 +924,10 @@ favorites
 
 const profile = program.command('profile').description('Read or update interests')
 
-profile.command('get').action(run(() => request('/api/knowledge/profile'), view(text.profileSchema, text.profile)))
+profile
+  .command('get')
+  .description('Show interests and the current task')
+  .action(run(() => request('/api/knowledge/profile'), view(text.profileSchema, text.profile)))
 
 const levels = z.enum(['high', 'interested', 'not_interested'])
 
