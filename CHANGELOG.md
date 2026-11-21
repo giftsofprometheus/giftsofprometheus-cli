@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- Skill: when the profile has no current task, offer once to save one built from the questions of the user, in their language, only after they agree to the exact text; after answering a search question, offer the personal feed once per conversation. One offer per message, the task first. Release after the service runs engine v9, which leaves recently read transcripts out of the feed.
+
 ## 0.8.1
 
 - Each request sends `X-Client-Id`, a random UUID created once in `client.json` (0600) next to the session. The service counts a guest CLI as one client in its analytics instead of a new one per request. A config folder that cannot be written only drops the header.

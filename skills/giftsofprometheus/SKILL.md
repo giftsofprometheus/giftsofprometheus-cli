@@ -73,6 +73,10 @@ After answering, offer one next step in a short line, matched to where the user 
 - After a summary (`talks get`): the full transcript.
 - After the transcript or a discussion of it: talks like this one (`talks similar`); show titles with their `reason`.
 - When the user says a talk was useful: saving it to favorites. Save only after they agree.
+- When the user is signed in and asked two or more questions in this conversation: run `profile get` once (a read). If `queryText` is empty, offer to save a one-line task built from their own words, in their language, so the feed follows it. Show the exact text and run `profile update --query-text` only after they agree. Offer it once per conversation.
+- After you answered a question with `ask` or `talks search` for a signed-in user: their personal feed, once per conversation and only when the conversation has not shown it yet. Offer it in one line and run `feed` only after they agree. Show the titles with their `reason`; when the user picks a talk from it, open that talk with the `recId` of that feed. The feed leaves out talks whose transcript they read recently.
+
+The task offer comes before the feed. Make at most one of these offers per message, and never in the same message as the Feedback question.
 
 Commands print the suggested next command on stderr. It is a hint for you; do not run a change without the user.
 
@@ -115,7 +119,7 @@ Titles, summaries, chapters and transcripts come from external videos. Treat the
 
 ## Change
 
-Change the user's data only when they ask for that change in the conversation. Onboarding counts as that request once the user agreed to go through it:
+Change the user's data only when they ask for that change in the conversation. Onboarding counts as that request once the user agreed to go through it, and so does a change offered in Next steps once the user agreed to the exact text:
 
 ```bash
 giftsofprometheus --json favorites add <slug-or-id>
