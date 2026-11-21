@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.8.2
 
-- Skill: after answering a search question, offer the personal feed once per conversation. When the profile has no current task, offer to save one built from the questions of the user, only after they agree.
+- Skill: when the profile has no current task, offer once to save one built from the questions of the user, in their language, only after they agree to the exact text; after answering a search question, offer the personal feed once per conversation. One offer per message, the task first. Release after the service runs engine v9, which leaves recently read transcripts out of the feed.
 
 ## 0.8.1
 
