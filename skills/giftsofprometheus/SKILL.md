@@ -73,6 +73,8 @@ After answering, offer one next step in a short line, matched to where the user 
 - After a summary (`talks get`): the full transcript.
 - After the transcript or a discussion of it: talks like this one (`talks similar`); show titles with their `reason`.
 - When the user says a talk was useful: saving it to favorites. Save only after they agree.
+- After you answered a question with `ask` or `talks search` for a signed-in user: their personal feed (`feed`), once per conversation and only when the conversation has not shown it yet. Show the titles with their `reason` and open a talk from it with the `recId` of that feed. The feed leaves out talks whose transcript they read recently.
+- When `profile get` shows no current task and the user asked two or more questions in this conversation: saving a one-line task built from their own words, so the feed follows it. Show the exact text and run `profile update --query-text` only after they agree. Offer it once per conversation.
 
 Commands print the suggested next command on stderr. It is a hint for you; do not run a change without the user.
 
