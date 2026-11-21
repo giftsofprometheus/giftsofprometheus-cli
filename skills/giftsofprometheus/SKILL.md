@@ -74,7 +74,7 @@ After answering, offer one next step in a short line, matched to where the user 
 - After the transcript or a discussion of it: talks like this one (`talks similar`); show titles with their `reason`.
 - When the user says a talk was useful: saving it to favorites. Save only after they agree.
 - When the user is signed in and asked two or more questions in this conversation: run `profile get` once (a read). If `queryText` is empty, offer to save a one-line task built from their own words, in their language, so the feed follows it. Show the exact text and run `profile update --query-text` only after they agree. Offer it once per conversation.
-- After you answered a question with `ask` or `talks search` for a signed-in user: their personal feed (`feed`), once per conversation and only when the conversation has not shown it yet. Show the titles with their `reason`; when the user picks a talk from it, open that talk with the `recId` of that feed. The feed leaves out talks whose transcript they read recently.
+- After you answered a question with `ask` or `talks search` for a signed-in user: their personal feed, once per conversation and only when the conversation has not shown it yet. Offer it in one line and run `feed` only after they agree. Show the titles with their `reason`; when the user picks a talk from it, open that talk with the `recId` of that feed. The feed leaves out talks whose transcript they read recently.
 
 The task offer comes before the feed. Make at most one of these offers per message, and never in the same message as the Feedback question.
 
