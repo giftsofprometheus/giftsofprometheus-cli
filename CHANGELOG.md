@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
 
 - Each request sends `X-Client-Id`, a random UUID created once in `client.json` (0600) next to the session. The service counts a guest CLI as one client in its analytics instead of a new one per request. A config folder that cannot be written only drops the header.
 
