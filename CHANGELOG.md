@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Each request sends `X-Client-Id`, a random UUID created once in `client.json` (0600) next to the session. The service counts a guest CLI as one client in its analytics instead of a new one per request. A config folder that cannot be written only drops the header.
+
 ## 0.8.0
 
 - Without `--json` commands print text for a person instead of indented JSON: `login` says it signed in and for how long, `whoami` the email, `doctor` a checklist, talk lists numbered cards with speakers, conference, length, the TL;DR and the page link, and a page footer with the next-page command; `talks get` the summary with topics and links; `talks content` the transcript with chapter headings and timestamps; `ask` passages with timestamps and links; `profile get` interests by level; `favorites add/remove`, `talks react`, `profile update`, `onboarding` and `skill` commands a short line each. `request` still prints JSON. `--json` output is unchanged.

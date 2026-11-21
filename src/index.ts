@@ -37,6 +37,36 @@ const onboardingDraft = join(directory, 'onboarding.json')
 // When the daily update check last ran and what npm reported then
 const updateState = join(directory, 'update.json')
 
+// A random id of this installation, sent as X-Client-Id so the service counts a guest CLI as one client in its analytics
+const clientFile = join(directory, 'client.json')
+
+type ClientId = { id: string }
+
+let clientId: Promise<string | null> | undefined
+
+/** Created once; a config folder that cannot be written only drops the header, it never fails a command */
+function installationId(): Promise<string | null> {
+  clientId ??= (async () => {
+    try {
+      const parsed = z.object({ id: z.uuid() }).safeParse(JSON.parse(await readFile(clientFile, 'utf8')))
+
+      if (parsed.success) return parsed.data.id
+    } catch {}
+
+    const id = randomUUID()
+
+    try {
+      await saveJson(clientFile, { id })
+
+      return id
+    } catch {
+      return null
+    }
+  })()
+
+  return clientId
+}
+
 type Credentials = { base: string; token: string }
 
 const credentialsSchema = z.object({ base: z.string(), token: z.string() })
@@ -79,7 +109,7 @@ class ApiError extends Error {
 }
 
 // A fresh 0600 file renamed into place: a secret never lands in an existing file with loose permissions or behind a symlink
-async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState) {
+async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const info = await lstat(directory)
 
@@ -124,6 +154,9 @@ async function request(path: string, method = 'GET', body?: unknown, authenticat
   const headers = new Headers({ 'Content-Type': 'application/json', 'X-Knowledge-Client': 'agent', 'User-Agent': `giftsofprometheus/${version}` })
 
   if (credential) headers.set('Authorization', `Bearer ${credential.token}`)
+  const installation = await installationId()
+
+  if (installation) headers.set('X-Client-Id', installation)
 
   for (let attempt = 1; ; attempt++) {
     let response: Response
