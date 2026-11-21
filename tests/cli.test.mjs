@@ -13,7 +13,13 @@ test('CLI validates credentials and business responses while preserving raw JSON
   const requests = []
 
   const server = createServer((request, response) => {
-    requests.push({ path: request.url, method: request.method, authorization: request.headers.authorization, agent: request.headers['user-agent'] })
+    requests.push({
+      path: request.url,
+      method: request.method,
+      authorization: request.headers.authorization,
+      agent: request.headers['user-agent'],
+      client: request.headers['x-client-id'],
+    })
     response.setHeader('Content-Type', 'application/json')
 
     if (request.url === '/api/knowledge/talks/good') response.end(JSON.stringify({ id: 1, slug: 'good', title: 'Keep this field' }))
@@ -57,6 +63,13 @@ test('CLI validates credentials and business responses while preserving raw JSON
     assert.equal(requests.at(-1).path, '/api/knowledge/talks?page=2')
     const raw = await cli(['request', '/api/account/me'])
     assert.equal(raw.code, 0)
+    const { id: client } = JSON.parse(await readFile(join(config, 'giftsofprometheus', 'client.json'), 'utf8'))
+    assert.match(client, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    assert.deepEqual(
+      requests.slice(-2).map(request => request.client),
+      [client, client],
+      'every request names the same installation'
+    )
     assert.equal(requests.at(-1).authorization, undefined)
     const sent = requests.length
 
@@ -132,7 +145,7 @@ test('ask and catalog search send the saved session and validate options before 
     assert.match(unauthenticated.data.error.nextStep, /login --start/)
     await cli(['talks', 'search', 'a'])
     assert.equal(requests.at(-1).authorization, undefined)
-    await mkdir(join(config, 'giftsofprometheus'))
+    await mkdir(join(config, 'giftsofprometheus'), { recursive: true })
     await writeFile(join(config, 'giftsofprometheus', 'credentials.json'), JSON.stringify({ base, token: 'secret' }), { mode: 0o600 })
     const result = await cli(['ask', 'a', '--q', 'b', '--q', 'c', '--limit', '5', '--per-talk', '1'])
     assert.equal(result.code, 0)

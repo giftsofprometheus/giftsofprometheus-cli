@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -168,7 +168,9 @@ test('login bounds the polling interval and stores the token atomically, 0600, o
 
     interval = 1
     const directory = join(h.config, 'giftsofprometheus')
-    await mkdir(directory, { mode: 0o755 })
+    // The first command already created the folder for the installation id; loosen it to see login tighten it
+    await mkdir(directory, { recursive: true })
+    await chmod(directory, 0o755)
     await writeFile(join(directory, 'credentials.json'), '{}', { mode: 0o644 })
     const result = await h.cli(['login'])
     assert.equal(result.code, 0, result.stdout)
@@ -176,7 +178,7 @@ test('login bounds the polling interval and stores the token atomically, 0600, o
     assert.equal((await stat(join(directory, 'credentials.json'))).mode & 0o777, 0o600)
     assert.equal((await stat(directory)).mode & 0o777, 0o700)
     assert.deepEqual(JSON.parse(await readFile(join(directory, 'credentials.json'), 'utf8')), { base: h.base, token: 'tok' })
-    assert.deepEqual(await readdir(directory), ['credentials.json'])
+    assert.deepEqual((await readdir(directory)).sort(), ['client.json', 'credentials.json'])
 
     const checkout = await mkdtemp(join(tmpdir(), 'giftsofprometheus-checkout-'))
     const home = await mkdtemp(join(tmpdir(), 'giftsofprometheus-home-'))
@@ -322,7 +324,7 @@ test('login --start returns the link at once and --wait finishes it without prin
     assert.equal(waited.code, 0, waited.stdout)
     assert.equal(JSON.parse(waited.stdout).signedIn, true)
     assert.equal(h.requests.at(-1).body.device_code, 'secret-device')
-    assert.deepEqual(await readdir(directory), ['credentials.json'])
+    assert.deepEqual((await readdir(directory)).sort(), ['client.json', 'credentials.json'])
   } finally {
     await h.close()
   }
