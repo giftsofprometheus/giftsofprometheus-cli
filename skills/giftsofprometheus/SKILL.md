@@ -38,7 +38,7 @@ The CLI stores its session outside the project. Never print, copy or ask for it.
 ```bash
 giftsofprometheus --json ask 'how to evaluate agents' --q 'agent evaluation' --q '智能体评估'  # passages, requires login
 giftsofprometheus --json talks search 'agent evaluation'   # published talks by title, summary, speaker or topic
-giftsofprometheus --json talks list --page 2               # the whole catalog, page by page
+giftsofprometheus --json talks list --page 2               # the catalog, page by page
 giftsofprometheus --json talks get <slug-or-id>            # one talk: summary, speakers, topics, publication
 giftsofprometheus --json talks content <slug-or-id>        # full transcript, requires login
 giftsofprometheus --json talks content <slug> --outline    # speakers and chapters, no transcript
@@ -59,7 +59,7 @@ giftsofprometheus --json profile get                       # interests and curre
   - Structure the answer by company: what they did, how it works, numbers from the talk, a link to the moment. End with a couple of lines on what they have in common, without "the right way" in your own voice.
   - Do not apply this to "how to install / run / configure a specific tool", "what is X", or a search for a particular talk or speaker.
 - If `ask` fails with code `passages_unavailable`, use `talks search`.
-- Lists are paginated: check `totalPages` and pass `--page`.
+- Lists are paginated: pass `--page` for the next page while you still need more. Do not page through the whole catalog: find talks with `ask` or `talks search`. To watch for new talks, read the RSS feed `https://giftsofprometheus.com/talks/feed.xml` (newest 50, with ETag) instead of listing pages.
 - Search and use the returned `slug` or `id` for exact reads.
 - A transcript is in the talk's original language. Segment timecodes are in milliseconds from the start of the talk. When a talk is a part of a longer recording, `sourceRange` gives its bounds in that recording. A talk without a transcript returns an empty array.
 - `request <path>` makes a read-only GET to a full path under `/api/knowledge/` or `/api/account/` that no command covers, for example `request /api/knowledge/talks/<slug>/state` for the user's current reaction and bookmark on a talk.
