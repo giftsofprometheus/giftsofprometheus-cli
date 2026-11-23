@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.4
+
+- `talks content --outline` asks the service for the chapters only (`part=outline`), and the service no longer counts it as reading the talk: a look at the outline does not hide the talk from the feed for two weeks. A service that ignores `part` still gets the outline cut on the client. `--from`/`--to` still read the transcript. Release after the service supports `part=outline` (GOP-67).
+
 ## 0.8.3
 
 - Skill: do not page through the whole catalog; find talks with `ask` or `talks search`, and watch for new talks through the RSS feed `https://giftsofprometheus.com/talks/feed.xml` instead of listing pages.

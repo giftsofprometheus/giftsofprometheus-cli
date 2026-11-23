@@ -607,8 +607,16 @@ async function resolveTalk(value: string) {
 // The service checks the recId against its own deliveries; the CLI only refuses what cannot be one
 const recIdOption = z.uuid()
 
-function recIdQuery(recId: string | undefined) {
-  return recId === undefined ? '' : `?recId=${encodeURIComponent(recIdOption.parse(recId))}`
+/** The content query: `part=outline` asks the service for the chapters without the transcript, which it does not count as a read */
+function contentQuery(recId: string | undefined, outline: boolean | undefined) {
+  const params = new URLSearchParams()
+
+  if (recId !== undefined) params.set('recId', recIdOption.parse(recId))
+
+  if (outline) params.set('part', 'outline')
+  const query = params.toString()
+
+  return query ? `?${query}` : ''
 }
 
 async function event(talk: string, type: 'bookmark' | 'unbookmark' | 'like' | 'dislike' | 'not_interested' | 'clear_reaction', recId?: string) {
@@ -776,6 +784,9 @@ function seconds(value: string) {
 
 const contentShape = z.object({ transcript: z.array(z.object({ startMs: z.number() }).loose()) }).loose()
 
+/** An outline as the service answers `part=outline` (GOP-67): the chapters and the number of segments, no transcript */
+const outlineShape = z.object({ transcriptSegments: z.number() }).loose()
+
 const talks = program.command('talks').description('Browse talks')
 
 talks
@@ -840,11 +851,11 @@ talks
   .option('--rec-id <recId>', 'recId of the list the talk came from (feed, search or similar)')
   .option('--from <time>', 'keep transcript segments that start at or after this time: seconds, m:ss or h:mm:ss')
   .option('--to <time>', 'keep transcript segments that start before this time')
-  .option('--outline', 'speakers, chapters and publication without the transcript')
+  .option('--outline', 'speakers, chapters and publication without the transcript; not counted as reading the talk')
   .action(
     run(
       async (id: string, options: { recId?: string; from?: string; to?: string; outline?: boolean }) => {
-        const query = recIdQuery(options.recId)
+        const query = contentQuery(options.recId, options.outline)
         const from = options.from === undefined ? 0 : seconds(options.from) * 1000
         const to = options.to === undefined ? Infinity : seconds(options.to) * 1000
 
@@ -852,7 +863,9 @@ talks
         const talk = await resolveTalk(id)
         const raw = await request(`/api/knowledge/talks/${encodeURIComponent(String(talk.slug))}/content${query}`, 'POST')
         const whole = !options.outline && options.from === undefined && options.to === undefined
-        const parsed = whole ? null : contentShape.safeParse(raw)
+        // A service before GOP-67 ignores `part` and sends the transcript; then the outline is cut here as before
+        const served = options.outline ? outlineShape.safeParse(raw) : null
+        const parsed = whole || served?.success ? null : contentShape.safeParse(raw)
 
         if (parsed && !parsed.success) {
           if (program.opts().json) throw parsed.error
@@ -862,8 +875,9 @@ talks
         const content = parsed?.success ? parsed.data : null
 
         // A range keeps the chapters, so an agent still sees where it is in the talk
-        const result =
-          content === null
+        const result = served?.success
+          ? served.data
+          : content === null
             ? raw
             : options.outline
               ? { ...content, transcript: undefined, transcriptSegments: content.transcript.length }

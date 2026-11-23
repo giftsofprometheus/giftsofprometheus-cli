@@ -26,6 +26,7 @@ const content = {
 
 test('talks content cuts the transcript to a stretch or an outline, and ask explains its limits before any request', async () => {
   const requests = []
+  let legacy = false
 
   const server = createServer((request, response) => {
     requests.push(request.url)
@@ -33,6 +34,9 @@ test('talks content cuts the transcript to a stretch or an outline, and ask expl
 
     if (request.url === '/api/knowledge/talks/panel') response.end(JSON.stringify({ id: 2, slug: 'panel' }))
     else if (request.url === '/api/knowledge/talks/panel/content') response.end(JSON.stringify(content))
+    // The service answers an outline without the transcript (GOP-67); one before it ignores `part`
+    else if (request.url === '/api/knowledge/talks/panel/content?part=outline')
+      response.end(JSON.stringify(legacy ? content : { ...content, transcript: undefined, transcriptSegments: content.transcript.length }))
     else response.end(JSON.stringify({ recId: 'result', items: [] }))
   })
 
@@ -81,10 +85,28 @@ test('talks content cuts the transcript to a stretch or an outline, and ask expl
       ['end']
     )
 
+    // The outline asks the service for the chapters only, so it is not counted as reading the talk
     const outline = await cli(['talks', 'content', 'panel', '--outline'])
+    assert.equal(requests.at(-1), '/api/knowledge/talks/panel/content?part=outline')
     assert.equal(outline.data.transcript, undefined)
     assert.equal(outline.data.transcriptSegments, 5)
     assert.deepEqual(outline.data.chapters, content.chapters)
+
+    // A service that ignores `part` sends the transcript, and the CLI cuts the outline itself
+    legacy = true
+    const cut = await cli(['talks', 'content', 'panel', '--outline'])
+    legacy = false
+    assert.equal(cut.code, 0)
+    assert.equal(cut.data.transcript, undefined)
+    assert.equal(cut.data.transcriptSegments, 5)
+    assert.deepEqual(cut.data.chapters, content.chapters)
+
+    const recId = '0193b2a4-7c1e-7000-8000-000000000001'
+    await cli(['talks', 'content', 'panel', '--outline', '--rec-id', recId])
+    assert.equal(requests.at(-1), `/api/knowledge/talks/panel/content?recId=${recId}&part=outline`)
+
+    // The ranges are reads: they take the whole transcript, without `part`
+    assert.ok(requests.filter(url => url.includes('/content')).every(url => url === '/api/knowledge/talks/panel/content' || url.endsWith('part=outline')))
 
     const count = requests.length
 

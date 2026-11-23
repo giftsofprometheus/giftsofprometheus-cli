@@ -41,7 +41,7 @@ giftsofprometheus --json talks search 'agent evaluation'   # published talks by 
 giftsofprometheus --json talks list --page 2               # the catalog, page by page
 giftsofprometheus --json talks get <slug-or-id>            # one talk: summary, speakers, topics, publication
 giftsofprometheus --json talks content <slug-or-id>        # full transcript, requires login
-giftsofprometheus --json talks content <slug> --outline    # speakers and chapters, no transcript
+giftsofprometheus --json talks content <slug> --outline    # speakers and chapters, no transcript; not counted as reading
 giftsofprometheus --json talks content <slug> --from 12:30 --to 18:00   # one stretch of the transcript
 giftsofprometheus --json talks similar <slug-or-id>        # up to four similar talks with a reason each
 giftsofprometheus --json feed                              # personal recommendations, requires login
@@ -50,7 +50,7 @@ giftsofprometheus --json profile get                       # interests and curre
 ```
 
 - For questions about what speakers say, use `ask`. It takes at most three formulations in total: the query and up to two `--q`, for example English, Chinese and the user's language. For names, titles, topics and conferences use `talks search`.
-- Open a found transcript with `talks content <slug> --rec-id <recId>` from the `ask` response. To read around a passage, take `--outline` for the chapters, then `--from`/`--to` for the stretch you need instead of the whole transcript. Summarize positions of different speakers and give links with timecodes.
+- Open a found transcript with `talks content <slug> --rec-id <recId>` from the `ask` response. To read around a passage, take `--outline` for the chapters (a look at the outline does not count as reading the talk and does not hide it from the feed), then `--from`/`--to` for the stretch you need instead of the whole transcript. Summarize positions of different speakers and give links with timecodes.
 - A link to a moment is the talk `url` with `t` set to the second where the cited words start in the transcript segment, not the start of the `ask` passage. Keep the `recId` in every link.
 - Each speaker has `organization` and `jobTitle` (`null` when unknown). Name a person's company only from these fields, never guess it. In a talk with several speakers, attribute a claim to a person only when the transcript makes clear who says it; otherwise attribute it to the talk. A company named in a title or a summary may be a customer or the subject of the talk, not the speaker's employer.
 - Practice questions ("how to review / roll out / test / organize X", "how does the industry do X") are answered with how teams that run X in production do it, not with your own recipe:
