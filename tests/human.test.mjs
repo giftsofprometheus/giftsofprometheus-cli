@@ -54,6 +54,7 @@ const routes = {
   'GET /api/knowledge/raw': { text: 'a\u009b31mb' },
   'GET /api/knowledge/talks/evil': { ...talk, id: 8, slug: 'ev\u009b31mil' },
   'POST /api/knowledge/talks/renamed/content': { title: 'Renamed', speakers: [], chapters: [], segments: [], transcriptSegments: 5 },
+  'POST /api/knowledge/talks/renamed/content?part=outline': { title: 'Renamed', speakers: [], chapters: [], segments: [] },
   'GET /api/knowledge/talks/renamed': { ...talk, id: 9, slug: 'renamed' },
   'GET /api/knowledge/talks?q=broken&page=1': { items: [{ ...talk, slug: '\ud800' }], page: 1, totalPages: 1 },
 }
