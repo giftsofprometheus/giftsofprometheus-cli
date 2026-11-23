@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.3
+
+- Skill: do not page through the whole catalog; find talks with `ask` or `talks search`, and watch for new talks through the RSS feed `https://giftsofprometheus.com/talks/feed.xml` instead of listing pages.
+
 ## 0.8.2
 
 - Skill: when the profile has no current task, offer once to save one built from the questions of the user, in their language, only after they agree to the exact text; after answering a search question, offer the personal feed once per conversation. One offer per message, the task first. Release after the service runs engine v9, which leaves recently read transcripts out of the feed.
