@@ -102,5 +102,5 @@ export function personalTail(line: string): string {
 export function tailCount(line: string): number {
   const tail = personalTail(line).slice(TAIL_PREFIX.length).replace(/\.$/, '').trim()
 
-  return tail ? tail.split('; ').length : 0
+  return tail.split(/;\s*/).filter(topic => topic.trim()).length
 }

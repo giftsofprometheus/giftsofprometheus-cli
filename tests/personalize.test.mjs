@@ -6,9 +6,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import { mergeSkill, personalDescription, tailTopics } from '../dist/skill-files.js'
+import { mergeSkill, personalDescription, tailCount, tailTopics } from '../dist/skill-files.js'
 
 const executable = fileURLToPath(new URL('../dist/index.js', import.meta.url))
+
+test('tailCount counts the topics of a tail, also one written by hand', () => {
+  assert.equal(tailCount('description: Find talks.'), 0)
+  assert.equal(tailCount('description: Find talks. Also good for RAG, поиск; Evals.'), 2)
+  assert.equal(tailCount('description: Find talks. Also good for a;b; ; c.'), 3)
+})
 
 const stock = 'description: Find AI conference talks.'
 
