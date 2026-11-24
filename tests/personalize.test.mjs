@@ -41,6 +41,7 @@ test('the personal tail fits ten words, keeps YAML plain and survives a skill up
 
 test('react records what the user said, and personalize rewrites only the loaded skill copy', async () => {
   const requests = []
+  let hang = false
 
   const server = createServer((request, response) => {
     let body = ''
@@ -70,6 +71,7 @@ test('react records what the user said, and personalize rewrites only the loaded
             needsOnboarding: false,
           })
         )
+      else if (request.url === '/api/knowledge/skill/personalize' && hang) return
       else response.end(JSON.stringify({ recorded: true }))
     })
   })
@@ -140,6 +142,24 @@ test('react records what the user said, and personalize rewrites only the loaded
     await cli(['talks', 'react', 'good', 'like'])
     assert.equal(requests.at(-1).tail, '2')
 
+    // A report the service never answers holds the command for two seconds at most, and once
+    hang = true
+    const started = Date.now()
+    const slow = await cli(['skill', 'personalize', '--file', file])
+    hang = false
+    assert.equal(slow.data.personalized, true)
+    assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`)
+    assert.equal(requests.filter(r => r.path === '/api/knowledge/skill/personalize').length, 3, 'no repeat')
+
+    // A copy in an agent folder counts too; a hand-made tail longer than ten topics is sent as ten
+    const agentCopy = join(config, '.claude', 'skills', 'giftsofprometheus')
+    await mkdir(agentCopy, { recursive: true })
+    const many = Array.from({ length: 12 }, (_, i) => `t${i}`).join('; ')
+    await writeFile(join(agentCopy, 'SKILL.md'), `---\nname: giftsofprometheus\n${stock} Also good for ${many}.\n---\nBody\n`)
+    await cli(['talks', 'react', 'good', 'like'])
+    assert.equal(requests.at(-1).tail, '10')
+    await rm(agentCopy, { recursive: true })
+
     const other = join(config, 'other.md')
     await writeFile(other, `---\nname: something-else\n${stock}\n---\n`)
     assert.equal((await cli(['skill', 'personalize', '--file', other])).code, 1, 'another skill is never touched')
@@ -156,6 +176,7 @@ test('react records what the user said, and personalize rewrites only the loaded
       assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '0', body: { result: 'write_failed', topics: 2 } })
     }
   } finally {
+    server.closeAllConnections()
     server.close()
     await chmod(join(config, 'skill'), 0o700).catch(() => {})
     await rm(config, { recursive: true, force: true })

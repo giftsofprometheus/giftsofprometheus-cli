@@ -2,8 +2,8 @@
 
 ## 0.9.0
 
-- Each request sends `X-Skill-Tail`: the number of topics in the personal tail of the installed skill (`0` without a tail), or `none` when the CLI finds no copy it can read. The CLI reads the copies at most once a day, together with the one `skill personalize` last wrote, and keeps the result in `skill.json` (0600). The topics themselves are not sent.
-- `skill personalize` tells the service what it did (`POST /api/knowledge/skill/personalize`: `written`, `unchanged` or `write_failed` and the number of topics). A failed report never changes the command output. Release after the service supports the route.
+- Each request sends `X-Skill-Tail`: the number of topics in the personal tail of the installed skill (`0` without a tail), or `none` when the CLI finds no copy it can read. Each run reads the first 8 KB of the copies in the agent folders of the home and the current folder, and of the copy `skill personalize` last wrote (its path is kept in `skill.json`, 0600); after 500 ms without an answer the header is left out. The topics themselves are not sent.
+- `skill personalize` tells the service what it did (`POST /api/knowledge/skill/personalize`: `written`, `unchanged` or `write_failed` and the number of topics). The report waits 2 seconds at most and is not repeated; a failed report never changes the command output. Release after the service supports the route.
 
 ## 0.8.4
 

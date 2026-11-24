@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { z } from 'zod'
 import { Command } from 'commander'
-import { chmod, lstat, mkdir, readFile, realpath, rename, stat, writeFile, unlink } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, readFile, realpath, rename, stat, writeFile, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -140,7 +140,14 @@ async function readState<T>(file: string, schema: z.ZodType<T & { base: string }
 // Set when a command returns a response it could not check; the text form then shows it as JSON instead of reading it
 let unchecked = false
 
-async function request(path: string, method = 'GET', body?: unknown, authenticated = true): Promise<unknown> {
+async function request(
+  path: string,
+  method = 'GET',
+  body?: unknown,
+  authenticated = true,
+  // An optional report (`skill personalize`) waits briefly and never repeats
+  { timeoutMs = 30_000, retry = true }: { timeoutMs?: number; retry?: boolean } = {}
+): Promise<unknown> {
   if (!path.startsWith('/') || path.includes('\\'))
     throw new ApiError(`Invalid API path: pass a full path starting with ${publicApi.join(', ')}, e.g. /api/knowledge/profile`)
   const target = new URL(base + path)
@@ -169,12 +176,12 @@ async function request(path: string, method = 'GET', body?: unknown, authenticat
         method,
         headers,
         redirect: 'error',
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       })
     } catch (e) {
       // A refused or reset connection never reached the service, so any method may repeat. A timeout may have, so it does not
-      if (attempt < RETRY_DELAYS_MS.length + 1 && !(e instanceof Error && e.name === 'TimeoutError')) {
+      if (retry && attempt < RETRY_DELAYS_MS.length + 1 && !(e instanceof Error && e.name === 'TimeoutError')) {
         await sleep(RETRY_DELAYS_MS[attempt - 1])
         continue
       }
@@ -194,7 +201,7 @@ async function request(path: string, method = 'GET', body?: unknown, authenticat
 
     // 502-504 without a service error code come from the proxy in front of the service: a restart or a dropped connection
     if (GATEWAY_STATUSES.has(response.status) && code === undefined) {
-      if (attempt < RETRY_DELAYS_MS.length + 1) {
+      if (retry && attempt < RETRY_DELAYS_MS.length + 1) {
         await sleep(RETRY_DELAYS_MS[attempt - 1])
         continue
       }
@@ -366,62 +373,80 @@ async function latestVersion(force = false): Promise<{ latest: string | null; fr
 
 type SkillStatus = 'current' | 'outdated' | 'modified' | 'linked'
 
-// The tail the CLI last saw in the installed skill and the copy `skill personalize` last wrote, for the X-Skill-Tail
-// header: the service counts in its analytics whether a personal tail is installed, never what it says
+// The copy `skill personalize` last wrote, for the X-Skill-Tail header: it may sit outside the agent folders (a plugin
+// copy). The service counts in its analytics whether a personal tail is installed, never what it says
 const skillState = join(directory, 'skill.json')
 
-const skillStateSchema = z.object({
-  base: z.string(),
-  checkedAt: z.number(),
-  tail: z.union([z.number().int().min(0).max(10), z.literal('none')]),
-  file: z.string().optional(),
-})
+const skillStateSchema = z.object({ base: z.string(), file: z.string() })
 
 type SkillState = z.infer<typeof skillStateSchema>
 
+// Only the frontmatter is needed, so a large or odd file never costs more than this
+const SKILL_HEAD_BYTES = 8192
+
+// A slow disk only drops the header, it never holds a command back
+const SKILL_TAIL_BUDGET_MS = 500
+
 let skillTailValue: Promise<string | null> | undefined
 
-/** Topics in the tail of the installed copies (the most of any), or `none` when no copy can be read */
-async function installedTail(file: string | undefined): Promise<number | 'none'> {
-  const files = new Set((await installedSkills()).map(skill => skill.file))
-  let tail: number | 'none' = 'none'
+/** Topics in the tail of one copy of this skill, or null when the path is not a readable copy */
+async function copyTail(path: string): Promise<number | null> {
+  try {
+    const file = await open(path, 'r')
 
-  if (file) files.add(file)
+    try {
+      if (!(await file.stat()).isFile()) return null
+      const buffer = Buffer.alloc(SKILL_HEAD_BYTES)
+      const { bytesRead } = await file.read(buffer, 0, SKILL_HEAD_BYTES, 0)
+      const head = buffer.subarray(0, bytesRead).toString('utf8')
 
-  for (const path of files) {
-    const line = skillDescription(await readFile(path, 'utf8').catch(() => ''))
+      if (!/^---\r?\nname: giftsofprometheus\r?\n/.test(head)) return null
+      const line = skillDescription(head)
 
-    if (line) tail = Math.max(tail === 'none' ? 0 : tail, tailCount(line))
+      return line ? Math.min(10, tailCount(line)) : null
+    } finally {
+      await file.close()
+    }
+  } catch {
+    return null
   }
-
-  return tail
 }
 
-/** The X-Skill-Tail value: the copies are read at most once a day, and a failure only drops the header */
+/** Topics in the tail of the copies in the agent folders and the one personalize wrote (the most of any), or `none` */
+async function installedTail(): Promise<number | 'none'> {
+  const state = await readState(skillState, skillStateSchema)
+  const paths = [...skillDirectories().map(folder => join(folder, 'SKILL.md')), ...(state ? [state.file] : [])]
+  const real = new Set(await Promise.all(paths.map(path => realpath(path).catch(() => null))))
+  const tails = (await Promise.all([...real].map(path => (path ? copyTail(path) : null)))).filter(tail => tail !== null)
+
+  return tails.length ? Math.max(...tails) : 'none'
+}
+
+/** The X-Skill-Tail value, read once per run; a failure or a slow disk only drops the header */
 function skillTailHeader(): Promise<string | null> {
-  skillTailValue ??= (async () => {
-    try {
-      const state = await readState(skillState, skillStateSchema)
+  skillTailValue ??= new Promise<string | null>(done => {
+    const timer = setTimeout(() => done(null), SKILL_TAIL_BUDGET_MS)
 
-      if (state && Date.now() - state.checkedAt < DAY_MS) return String(state.tail)
-      const tail = await installedTail(state?.file)
-
-      await saveJson(skillState, { base, checkedAt: Date.now(), tail, ...(state?.file ? { file: state.file } : {}) }).catch(() => {})
-
-      return String(tail)
-    } catch {
-      return null
-    }
-  })()
+    installedTail().then(
+      tail => {
+        clearTimeout(timer)
+        done(String(tail))
+      },
+      () => {
+        clearTimeout(timer)
+        done(null)
+      }
+    )
+  })
 
   return skillTailValue
 }
 
-/** After `skill personalize`: remember the copy, read the tail again and tell the service what happened. Never fails */
+/** After `skill personalize`: remember a copy it could write and tell the service what happened. Never fails or waits long */
 async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number) {
-  await saveJson(skillState, { base, checkedAt: 0, tail: 'none', file }).catch(() => {})
+  if (result !== 'write_failed') await saveJson(skillState, { base, file }).catch(() => {})
   skillTailValue = undefined
-  await request('/api/knowledge/skill/personalize', 'POST', { result, topics }).catch(() => {})
+  await request('/api/knowledge/skill/personalize', 'POST', { result, topics }, true, { timeoutMs: 2000, retry: false }).catch(() => {})
 }
 
 // Where agents and `npx skills add` keep personal and project skills
