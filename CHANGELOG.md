@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+
+- Each request sends `X-Skill-Tail`: the number of topics in the personal tail of the installed skill (`0` without a tail), or `none` when the CLI finds no copy it can read. Each run reads the first 8 KB of the copies in the agent folders of the home and the current folder, and of the copy `skill personalize` last wrote (its path is kept in `skill.json`, 0600); after 500 ms without an answer the header is left out. The topics themselves are not sent.
+- `skill personalize` tells the service what it did (`POST /api/knowledge/skill/personalize`: `written`, `unchanged` or `write_failed` and the number of topics). The report waits 2 seconds at most and is not repeated; a failed report never changes the command output. Release after the service supports the route.
+
 ## 0.8.4
 
 - `talks content --outline` asks the service for the chapters only (`part=outline`), and the service no longer counts it as reading the talk: a look at the outline does not hide the talk from the feed for two weeks. A service that ignores `part` still gets the outline cut on the client. `--from`/`--to` still read the transcript. Release after the service supports `part=outline` (GOP-67).
