@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailTopics } from './skill-files.js'
+import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailCount, tailTopics } from './skill-files.js'
 import * as text from './render.js'
 import { printable } from './render.js'
 
@@ -109,7 +109,7 @@ class ApiError extends Error {
 }
 
 // A fresh 0600 file renamed into place: a secret never lands in an existing file with loose permissions or behind a symlink
-async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId) {
+async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId | SkillState) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const info = await lstat(directory)
 
@@ -157,6 +157,9 @@ async function request(path: string, method = 'GET', body?: unknown, authenticat
   const installation = await installationId()
 
   if (installation) headers.set('X-Client-Id', installation)
+  const tail = await skillTailHeader()
+
+  if (tail) headers.set('X-Skill-Tail', tail)
 
   for (let attempt = 1; ; attempt++) {
     let response: Response
@@ -362,6 +365,64 @@ async function latestVersion(force = false): Promise<{ latest: string | null; fr
 }
 
 type SkillStatus = 'current' | 'outdated' | 'modified' | 'linked'
+
+// The tail the CLI last saw in the installed skill and the copy `skill personalize` last wrote, for the X-Skill-Tail
+// header: the service counts in its analytics whether a personal tail is installed, never what it says
+const skillState = join(directory, 'skill.json')
+
+const skillStateSchema = z.object({
+  base: z.string(),
+  checkedAt: z.number(),
+  tail: z.union([z.number().int().min(0).max(10), z.literal('none')]),
+  file: z.string().optional(),
+})
+
+type SkillState = z.infer<typeof skillStateSchema>
+
+let skillTailValue: Promise<string | null> | undefined
+
+/** Topics in the tail of the installed copies (the most of any), or `none` when no copy can be read */
+async function installedTail(file: string | undefined): Promise<number | 'none'> {
+  const files = new Set((await installedSkills()).map(skill => skill.file))
+  let tail: number | 'none' = 'none'
+
+  if (file) files.add(file)
+
+  for (const path of files) {
+    const line = skillDescription(await readFile(path, 'utf8').catch(() => ''))
+
+    if (line) tail = Math.max(tail === 'none' ? 0 : tail, tailCount(line))
+  }
+
+  return tail
+}
+
+/** The X-Skill-Tail value: the copies are read at most once a day, and a failure only drops the header */
+function skillTailHeader(): Promise<string | null> {
+  skillTailValue ??= (async () => {
+    try {
+      const state = await readState(skillState, skillStateSchema)
+
+      if (state && Date.now() - state.checkedAt < DAY_MS) return String(state.tail)
+      const tail = await installedTail(state?.file)
+
+      await saveJson(skillState, { base, checkedAt: Date.now(), tail, ...(state?.file ? { file: state.file } : {}) }).catch(() => {})
+
+      return String(tail)
+    } catch {
+      return null
+    }
+  })()
+
+  return skillTailValue
+}
+
+/** After `skill personalize`: remember the copy, read the tail again and tell the service what happened. Never fails */
+async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number) {
+  await saveJson(skillState, { base, checkedAt: 0, tail: 'none', file }).catch(() => {})
+  skillTailValue = undefined
+  await request('/api/knowledge/skill/personalize', 'POST', { result, topics }).catch(() => {})
+}
 
 // Where agents and `npx skills add` keep personal and project skills
 function skillDirectories() {
@@ -1276,7 +1337,12 @@ async function personalizeSkill(o: { file: string }) {
   const topics = tailTopics(await personalTopics())
   const next = personalDescription(line, topics)
 
-  if (next === line) return { personalized: true, changed: false, path: file, topics }
+  if (next === line) {
+    await reportPersonalize(file, 'unchanged', topics.length)
+
+    return { personalized: true, changed: false, path: file, topics }
+  }
+
   const temporary = `${file}.${randomUUID()}.tmp`
 
   try {
@@ -1288,6 +1354,7 @@ async function personalizeSkill(o: { file: string }) {
     await rename(temporary, file)
   } catch (e) {
     await unlink(temporary).catch(() => {})
+    await reportPersonalize(file, 'write_failed', topics.length)
 
     return {
       personalized: false,
@@ -1297,6 +1364,8 @@ async function personalizeSkill(o: { file: string }) {
       command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
     }
   }
+
+  await reportPersonalize(file, 'written', topics.length)
 
   return { personalized: true, changed: true, path: file, topics }
 }

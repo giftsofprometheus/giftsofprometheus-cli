@@ -178,7 +178,7 @@ test('login bounds the polling interval and stores the token atomically, 0600, o
     assert.equal((await stat(join(directory, 'credentials.json'))).mode & 0o777, 0o600)
     assert.equal((await stat(directory)).mode & 0o777, 0o700)
     assert.deepEqual(JSON.parse(await readFile(join(directory, 'credentials.json'), 'utf8')), { base: h.base, token: 'tok' })
-    assert.deepEqual((await readdir(directory)).sort(), ['client.json', 'credentials.json'])
+    assert.deepEqual((await readdir(directory)).sort(), ['client.json', 'credentials.json', 'skill.json'])
 
     const checkout = await mkdtemp(join(tmpdir(), 'giftsofprometheus-checkout-'))
     const home = await mkdtemp(join(tmpdir(), 'giftsofprometheus-home-'))
@@ -324,7 +324,7 @@ test('login --start returns the link at once and --wait finishes it without prin
     assert.equal(waited.code, 0, waited.stdout)
     assert.equal(JSON.parse(waited.stdout).signedIn, true)
     assert.equal(h.requests.at(-1).body.device_code, 'secret-device')
-    assert.deepEqual((await readdir(directory)).sort(), ['client.json', 'credentials.json'])
+    assert.deepEqual((await readdir(directory)).sort(), ['client.json', 'credentials.json', 'skill.json'])
   } finally {
     await h.close()
   }

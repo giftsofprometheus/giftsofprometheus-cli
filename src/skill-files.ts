@@ -97,3 +97,10 @@ export function personalDescription(line: string, topics: string[]): string {
 export function personalTail(line: string): string {
   return line.match(TAIL)?.[0] ?? ''
 }
+
+/** Topics in the personal tail of a description line, 0 without one */
+export function tailCount(line: string): number {
+  const tail = personalTail(line).slice(TAIL_PREFIX.length).replace(/\.$/, '').trim()
+
+  return tail ? tail.split('; ').length : 0
+}

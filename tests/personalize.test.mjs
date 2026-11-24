@@ -46,7 +46,7 @@ test('react records what the user said, and personalize rewrites only the loaded
     let body = ''
     request.on('data', chunk => (body += chunk))
     request.on('end', () => {
-      requests.push({ path: request.url, method: request.method, body: body ? JSON.parse(body) : undefined })
+      requests.push({ path: request.url, method: request.method, tail: request.headers['x-skill-tail'], body: body ? JSON.parse(body) : undefined })
       response.setHeader('Content-Type', 'application/json')
 
       if (request.url === '/api/knowledge/talks/good') response.end(JSON.stringify({ id: 5, slug: 'good' }))
@@ -81,8 +81,13 @@ test('react records what the user said, and personalize rewrites only the loaded
   const cli = args =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [executable, '--json', ...args], {
+        // No agent folders of the machine running the test: the skill copies the CLI finds are only the ones made here
+        cwd: config,
         env: {
           ...process.env,
+          HOME: config,
+          CLAUDE_CONFIG_DIR: '',
+          CODEX_HOME: '',
           GIFTSOFPROMETHEUS_URL: base,
           XDG_CONFIG_HOME: config,
           GIFTSOFPROMETHEUS_NO_UPDATE_CHECK: '1',
@@ -108,6 +113,7 @@ test('react records what the user said, and personalize rewrites only the loaded
     ]) {
       const result = await cli(['talks', 'react', 'good', reaction])
       assert.equal(result.code, 0, JSON.stringify(result.data))
+      assert.equal(requests.at(-1).tail, 'none', 'no skill copy yet')
       assert.deepEqual(
         requests.at(-1).body.map(({ id: _id, ...rest }) => rest),
         [{ type, talkId: 5, context: 'talk_page' }]
@@ -127,7 +133,12 @@ test('react records what the user said, and personalize rewrites only the loaded
     assert.equal(done.code, 0, JSON.stringify(done.data))
     assert.deepEqual(done.data, { personalized: true, changed: true, path: file, topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'] })
     assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock} Also good for RAG, поиск и эмбеддинги; Evals и бенчмарки.\n---\nBody\n`)
+    assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '2', body: { result: 'written', topics: 2 } })
     assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false, 'running it again changes nothing')
+    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2 })
+    // The copy is remembered, so later commands carry its tail without a new personalize
+    await cli(['talks', 'react', 'good', 'like'])
+    assert.equal(requests.at(-1).tail, '2')
 
     const other = join(config, 'other.md')
     await writeFile(other, `---\nname: something-else\n${stock}\n---\n`)
@@ -142,6 +153,7 @@ test('react records what the user said, and personalize rewrites only the loaded
       assert.equal(blocked.data.personalized, false)
       assert.match(blocked.data.command, /skill personalize --file '.*SKILL\.md'$/)
       assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock}\n---\nBody\n`, 'a failed write leaves the file as it was')
+      assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '0', body: { result: 'write_failed', topics: 2 } })
     }
   } finally {
     server.close()
