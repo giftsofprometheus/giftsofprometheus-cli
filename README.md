@@ -32,7 +32,7 @@ npm install -g @giftsofprometheus/cli
 giftsofprometheus doctor
 ```
 
-Без установки: `npx @giftsofprometheus/cli talks search "evals"`. Пакет публикуется из GitHub Actions с [подтверждением происхождения](https://www.npmjs.com/package/@giftsofprometheus/cli#provenance).
+Запускайте CLI только после такой установки, не через `npx`, `pnpm dlx` или `bunx`: разовые запуски смешивают версии на одной машине, и старая версия может стереть то, что сохранила новая. Пакет публикуется из GitHub Actions с [подтверждением происхождения](https://www.npmjs.com/package/@giftsofprometheus/cli#provenance).
 
 ## Быстрый старт
 

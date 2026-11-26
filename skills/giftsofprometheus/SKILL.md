@@ -1,7 +1,7 @@
 ---
 name: giftsofprometheus
 description: Find AI engineering talks from conferences around the world with Russian summaries, read their full transcripts, and manage the signed-in user's favorites, interests and personal feed through the giftsofprometheus CLI, and build a starting profile in the chat. Use when the user asks for talks, speakers or transcripts on an AI engineering topic, or wants to save, list or remove favorites on Gifts of Prometheus.
-allowed-tools: Bash(giftsofprometheus:*), Bash(npx -y @giftsofprometheus/cli:*), Bash(pnpm dlx @giftsofprometheus/cli:*), Bash(bunx @giftsofprometheus/cli:*)
+allowed-tools: Bash(giftsofprometheus:*)
 ---
 
 # Gifts of Prometheus
@@ -10,7 +10,7 @@ allowed-tools: Bash(giftsofprometheus:*), Bash(npx -y @giftsofprometheus/cli:*),
 
 ## Setup
 
-Run `command -v giftsofprometheus`. If it is missing, run every command below as `npx -y @giftsofprometheus/cli` with the same arguments instead of `giftsofprometheus`, and mention once that a permanent install is described in https://github.com/giftsofprometheus/giftsofprometheus-cli#install. If `npx` is missing or disabled, use `pnpm dlx @giftsofprometheus/cli` or `bunx @giftsofprometheus/cli`. If none of them runs, ask the user to install the CLI and stop.
+Run `command -v giftsofprometheus`. If it is missing, install it with `npm install -g @giftsofprometheus/cli` (Node.js 22.12 or newer), asking the user first unless they already asked you to set it up. Do not run the CLI through `npx`, `pnpm dlx` or `bunx`: one-off runs mix versions on one machine, and an older version drops what a newer one saved. If the install fails, give the user the command and https://github.com/giftsofprometheus/giftsofprometheus-cli#install, and stop.
 
 Use only the CLI. Do not call the site's API with `curl`, `fetch` or a script, even for public data: the service refuses any client other than the site and the CLI with `cli_required`, and its rules on `recId`, sign-in and feedback live in the CLI and this skill. For a path that no command covers, use `request` (see Read).
 
@@ -143,6 +143,6 @@ giftsofprometheus --json profile update --interest agents=high --remove-interest
 
 ## Errors
 
-With `--json` a failure prints `{"error":{"message","status","code","nextStep"}}` and exits with code 1. `code` and `nextStep` are present when the service sent them: decide by `code` (for example `talk_not_found`, `unknown_recommendation`, `rate_limited`), follow `nextStep`, and show `message` to the user as it is. Status 401 means the session is missing, expired or revoked: sign in as described in Sign in and repeat the command. Code `cli_required` means the request did not come from the CLI: run the command through the CLI as described in Setup.
+With `--json` a failure prints `{"error":{"message","status","code","nextStep"}}` and exits with code 1. `code` and `nextStep` are present when the service sent them: decide by `code` (for example `talk_not_found`, `unknown_recommendation`, `rate_limited`), follow `nextStep`, and show `message` to the user as it is. Status 401 means the session is missing, expired or revoked: sign in as described in Sign in and repeat the command. Code `cli_required` means the request did not come from the CLI: run the command through the CLI as described in Setup. An `unknown option` error for an option this skill names (for example `--reading`) means the installed CLI is older than this skill: offer `npm install -g @giftsofprometheus/cli@latest` and run it after the user agrees.
 
 The CLI repeats a request twice by itself after a connection failure or a 502, 503 or 504 from the proxy. If it still fails with "The service is temporarily unavailable" or "The service is unreachable", tell the user in one line, wait a minute and try once more before you stop.
