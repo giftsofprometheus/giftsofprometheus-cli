@@ -129,6 +129,10 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 | `profile get` | Ваши интересы, темы из вашей активности и текущая задача | ✓ |
 | `profile update [--interest тема=уровень] [--remove-interest тема] [--query-text текст]` | Изменить интересы (`high`, `interested`, `not_interested`) или текущую задачу; остальное не меняется | ✓ |
 | `feed` | Подборка по вашему профилю | ✓ |
+| `share create --title текст --question текст --file путь` | Загрузить ответ агента черновиком страницы: его видите только вы. Печатает ссылку на предпросмотр и что стоит проверить | ✓ |
+| `share publish <id> [--visibility unlisted\|password\|public] [--password пароль] [--confirm-public]` | Опубликовать черновик: по ссылке (по умолчанию), по ссылке и паролю или публично для поисковиков | ✓ |
+| `share list`, `share get <id>` | Ваши страницы; одна страница с её Markdown | ✓ |
+| `share update <id> [--title] [--question] [--file]`, `share visibility <id> <режим> [--password] [--confirm-public]`, `share delete <id>` | Заменить содержимое (адрес тот же), сменить доступ, удалить страницу | ✓ |
 | `request <путь>` | GET-запрос только на чтение к `/api/knowledge/…` или `/api/account/…`; печатает ответ сервиса как JSON | ✓ |
 | `onboarding topics` | Темы для выбора интересов | |
 | `onboarding deck [--interest тема=уровень] [--query-text текст]` | Новый черновик по темам (`interested`, `not_interested`) и до 8 пронумерованных докладов для оценки | |

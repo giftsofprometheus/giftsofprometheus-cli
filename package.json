@@ -1,6 +1,6 @@
 {
   "name": "@giftsofprometheus/cli",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "World AI knowledge in Russian for you and your AI agent: search AI engineering talks, read transcripts and find production best practices from the shell, Claude Code, Codex or Cursor",
   "keywords": [
     "agent-skills",

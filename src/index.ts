@@ -102,7 +102,9 @@ class ApiError extends Error {
     message: string,
     readonly status = 1,
     readonly code?: string,
-    readonly nextStep?: string
+    readonly nextStep?: string,
+    // What `share create` found that keeps an answer from being stored: the kind, the line and a cut excerpt
+    readonly findings?: Array<{ kind: string; excerpt: string; line: number }>
   ) {
     super(message)
   }
@@ -194,7 +196,17 @@ async function request(
     if (response.ok) return data
 
     const failure = z
-      .object({ error_description: z.string().optional(), error: z.string().optional(), code: z.string().optional(), nextStep: z.string().optional() })
+      .object({
+        error_description: z.string().optional(),
+        error: z.string().optional(),
+        code: z.string().optional(),
+        nextStep: z.string().optional(),
+      })
+      .safeParse(data)
+
+    // Read on their own: findings the CLI cannot read must not hide the error message and its code
+    const listed = z
+      .object({ findings: z.array(z.object({ kind: z.string().max(40), excerpt: z.string().max(40), line: z.number() })).max(20) })
       .safeParse(data)
 
     const code = failure.success ? failure.data.code : undefined
@@ -212,7 +224,11 @@ async function request(
     const message = failure.success ? failure.data.error_description || failure.data.error || `HTTP ${response.status}` : `HTTP ${response.status}`
     const nextStep = failure.success && failure.data.nextStep ? printable(failure.data.nextStep).slice(0, 500) : undefined
 
-    throw new ApiError(printable(message).slice(0, 500), response.status, code === undefined ? undefined : printable(code).slice(0, 100), nextStep)
+    const findings = listed.success
+      ? listed.data.findings.map(found => ({ kind: printable(found.kind), excerpt: printable(found.excerpt), line: found.line }))
+      : undefined
+
+    throw new ApiError(printable(message).slice(0, 500), response.status, code === undefined ? undefined : printable(code).slice(0, 100), nextStep, findings)
   }
 }
 
@@ -288,9 +304,16 @@ function run<Args extends unknown[]>(fn: (...args: Args) => Promise<unknown>, re
       const signIn = program.opts().json ? SIGN_IN_STEPS : `sign in with ${cmd()} login, then repeat this command`
       const nextStep = status === 401 ? signIn : e instanceof ApiError ? e.nextStep : undefined
 
-      if (program.opts().json) console.log(JSON.stringify({ error: { message, status, ...(code ? { code } : {}), ...(nextStep ? { nextStep } : {}) } }))
+      const findings = e instanceof ApiError ? e.findings : undefined
+
+      if (program.opts().json)
+        console.log(
+          JSON.stringify({ error: { message, status, ...(code ? { code } : {}), ...(nextStep ? { nextStep } : {}), ...(findings ? { findings } : {}) } })
+        )
       else {
         console.error(printable(message))
+
+        for (const found of findings ?? []) console.error(`  line ${found.line}: ${found.kind} ${found.excerpt}`)
 
         if (nextStep) console.error(`Next: ${printable(nextStep)}`)
       }
@@ -1387,6 +1410,163 @@ program
     run(
       () => request('/api/knowledge/feed'),
       view(text.listSchema, value => text.talkList(context, value, `No recommendations yet. Build a profile with: ${cmd()} onboarding topics`))
+    )
+  )
+
+// ── share: an answer of the agent as a page /shared/<id> on the site ──
+
+const SHARES = '/api/account/shared-answers'
+
+const shareId = (id: string) => {
+  if (!/^[1-9A-HJ-NP-Za-km-z]{12}$/.test(id)) throw new ApiError('A page id is 12 characters from its address /shared/<id>; see share list')
+
+  return id
+}
+
+/** The Markdown of an answer: a file, or `-` for stdin. Read as text, at most 5 MB like the service limit */
+async function answerMarkdown(file: string) {
+  const markdown = file === '-' ? await readStdin() : await readFile(resolve(file), 'utf8')
+
+  if (Buffer.byteLength(markdown, 'utf8') > 5 * 1024 * 1024) throw new ApiError('The answer is larger than 5 MB')
+
+  if (!markdown.trim()) throw new ApiError('The answer file is empty')
+
+  return markdown
+}
+
+async function readStdin() {
+  const chunks: Buffer[] = []
+
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
+
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/** The agent that runs the CLI, from the variables these agents set; only a label on the page record */
+const detectedAgent = () =>
+  process.env.CLAUDECODE
+    ? 'claude-code'
+    : process.env.CODEX_SANDBOX || process.env.CODEX_THREAD_ID
+      ? 'codex'
+      : process.env.CURSOR_TRACE_ID
+        ? 'cursor'
+        : undefined
+
+type AccessOptions = { visibility?: string; password?: string; confirmPublic?: boolean }
+
+function accessBody(options: AccessOptions) {
+  if (options.visibility && !['unlisted', 'password', 'public'].includes(options.visibility)) throw new ApiError('Access is one of: unlisted, password, public')
+  // A password alone means the password mode; with another mode the service refuses it
+  // An empty --password (an unset variable) is sent as is, so the service refuses it instead of publishing without one
+  const visibility = options.visibility ?? (options.password !== undefined ? 'password' : undefined)
+
+  return {
+    ...(visibility ? { visibility } : {}),
+    ...(options.password !== undefined ? { password: options.password } : {}),
+    ...(options.confirmPublic ? { confirmPublic: true } : {}),
+  }
+}
+
+const shareView = view(text.shareSchema, text.share)
+
+const share = program.command('share').description('Publish an answer as a page on the site: create a private draft, let the user check it, then publish')
+
+share
+  .command('create')
+  .description('Upload an answer as a private draft; prints the preview link that only the signed-in user can open')
+  .requiredOption('--title <title>', 'page title, up to 200 characters')
+  .requiredOption('--question <question>', "the user's question, up to 4000 characters")
+  .requiredOption('--file <path>', 'the answer in Markdown, or - for stdin')
+  .action(
+    run(async (options: { title: string; question: string; file: string }) => {
+      // Never repeated: a repeat after a lost answer would leave a second draft
+      const result = await request(
+        SHARES,
+        'POST',
+        { title: options.title, question: options.question, markdown: await answerMarkdown(options.file), sourceAgent: detectedAgent(), cliVersion: version },
+        true,
+        { timeoutMs: 60_000, retry: false }
+      )
+
+      hint(
+        'Give the user previewUrl to check the draft. Publish only after the user agrees: share publish <id>',
+        'Check the draft at the link above, then publish it with: share publish <id>'
+      )
+
+      return result
+    }, shareView)
+  )
+
+share
+  .command('publish')
+  .description('Publish a draft: by default anyone with the link can open it, not search engines')
+  .argument('<id>')
+  .option('--visibility <mode>', 'unlisted (default), password or public')
+  .option('--password <password>', 'at least 8 characters, chosen by the user; implies --visibility password')
+  .option('--confirm-public', 'for --visibility public: the user agreed that search engines index the page')
+  .action(run((id: string, options: AccessOptions) => request(`${SHARES}/${shareId(id)}/publish`, 'POST', accessBody(options)), shareView))
+
+share
+  .command('list')
+  .description("The user's drafts and published pages")
+  .action(
+    run(
+      () => request(SHARES),
+      view(text.shareListSchema, value => text.shareList(value, `No pages yet. Upload an answer with: ${cmd()} share create`))
+    )
+  )
+
+share
+  .command('get')
+  .description('One page with its Markdown, for an update')
+  .argument('<id>')
+  .action(run((id: string) => request(`${SHARES}/${shareId(id)}`), view(text.sharePageSchema, text.sharePage)))
+
+share
+  .command('update')
+  .description('Replace the content of a page; the address stays, no history is kept')
+  .argument('<id>')
+  .option('--title <title>', 'new title')
+  .option('--question <question>', 'new question')
+  .option('--file <path>', 'new answer in Markdown, or - for stdin')
+  .action(
+    run(async (id: string, options: { title?: string; question?: string; file?: string }) => {
+      // An empty value is sent too: the service refuses it rather than the CLI dropping it silently
+      const body = {
+        ...(options.title !== undefined ? { title: options.title } : {}),
+        ...(options.question !== undefined ? { question: options.question } : {}),
+        ...(options.file !== undefined ? { markdown: await answerMarkdown(options.file) } : {}),
+      }
+
+      if (!Object.keys(body).length) throw new ApiError('Pass --title, --question or --file')
+
+      return request(`${SHARES}/${shareId(id)}`, 'PATCH', body, true, { timeoutMs: 60_000 })
+    }, shareView)
+  )
+
+share
+  .command('visibility')
+  .description('Change who can open a page: unlisted, password or public')
+  .argument('<id>')
+  .argument('<mode>', 'unlisted, password or public')
+  .option('--password <password>', 'a new password: at least 8 characters, chosen by the user')
+  .option('--confirm-public', 'for public: the user agreed that search engines index the page')
+  .action(
+    run(
+      (id: string, mode: string, options: AccessOptions) =>
+        request(`${SHARES}/${shareId(id)}/visibility`, 'PATCH', accessBody({ ...options, visibility: mode })),
+      shareView
+    )
+  )
+
+share
+  .command('delete')
+  .description('Delete a page: its address then answers that the author removed it')
+  .argument('<id>')
+  .action(
+    run(
+      (id: string) => request(`${SHARES}/${shareId(id)}`, 'DELETE'),
+      (_, id: string) => `Deleted ${printable(id)}.`
     )
   )
 
