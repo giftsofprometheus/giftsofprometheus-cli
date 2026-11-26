@@ -146,7 +146,14 @@ test('react records what the user said, and personalize rewrites only the loaded
 
     const done = await cli(['skill', 'personalize', '--file', folder])
     assert.equal(done.code, 0, JSON.stringify(done.data))
-    assert.deepEqual(done.data, { personalized: true, changed: true, path: file, topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'], source: 'explicit' })
+    assert.deepEqual(done.data, {
+      personalized: true,
+      changed: true,
+      path: file,
+      topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'],
+      source: 'explicit',
+      reading: 'unasked',
+    })
     assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock} Also good for RAG, поиск и эмбеддинги; Evals и бенчмарки.\n---\nBody\n`)
     assert.deepEqual(requests.at(-1), {
       path: '/api/knowledge/skill/personalize',
@@ -178,7 +185,7 @@ test('react records what the user said, and personalize rewrites only the loaded
     assert.equal(requests.at(-1).tail, '10')
     await rm(agentCopy, { recursive: true })
 
-    // No questionnaire: the tail comes from reading; an inferred topic already in the tail keeps its place
+    // No questionnaire: topics from reading are only suggested until the user agrees
     const tail = async () => (await readFile(file, 'utf8')).match(/Also good for (.*)\.\n/)?.[1]
     await writeFile(file, '---\nname: giftsofprometheus\n' + stock + '\n---\nBody\n')
     interests = []
@@ -186,30 +193,60 @@ test('react records what the user said, and personalize rewrites only the loaded
       { topic: 'evals', score: 1, basis: { talks: 3, episodes: 0 } },
       { topic: 'rag', score: 0.6, basis: { talks: 2, episodes: 0 } },
     ]
-    const fromReading = await cli(['skill', 'personalize', '--file', file])
-    assert.deepEqual(fromReading.data, {
+    const asked = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual(asked.data, {
+      personalized: true,
+      changed: false,
+      path: file,
+      topics: [],
+      reading: 'unasked',
+      suggested: ['Evals и бенчмарки', 'RAG, поиск и эмбеддинги'],
+    })
+    assert.equal(await tail(), undefined, 'nothing from reading is written before the user agrees')
+    assert.equal((await cli(['skill', 'personalize', '--file', file, '--reading', 'maybe'])).code, 1)
+
+    const agreed = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
+    assert.deepEqual(agreed.data, {
       personalized: true,
       changed: true,
       path: file,
       topics: ['Evals и бенчмарки', 'RAG, поиск и эмбеддинги'],
       source: 'inferred',
+      reading: 'agreed',
     })
     assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 2, tail_source: 'inferred' })
+
+    // The answer is remembered; new weights among the topics that fit do not reorder the tail
     inferredInterests = [
       { topic: 'rag', score: 1, basis: { talks: 4, episodes: 0 } },
       { topic: 'evals', score: 0.9, basis: { talks: 3, episodes: 0 } },
     ]
-    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false, 'new weights do not reorder the tail')
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false)
     assert.equal(await tail(), 'Evals и бенчмарки; RAG, поиск и эмбеддинги')
+
+    // A stronger new topic takes the place of one that no longer fits; the one that still fits keeps its place
+    inferredInterests = [
+      { topic: 'voice', score: 1, basis: { talks: 5, episodes: 0 } },
+      { topic: 'evals', score: 0.9, basis: { talks: 3, episodes: 0 } },
+      { topic: 'rag', score: 0.5, basis: { talks: 2, episodes: 0 } },
+    ]
+    assert.deepEqual((await cli(['skill', 'personalize', '--file', file])).data.topics, ['Evals и бенчмарки', 'Голосовые агенты'])
+
     // The questionnaire comes first; a topic in both is named once
     interests = [{ topic: 'rag', level: 'interested' }]
     const mixed = await cli(['skill', 'personalize', '--file', file])
-    assert.deepEqual([mixed.data.topics, mixed.data.source], [['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'], 'mixed'])
-    // When the signal is gone, the tail goes too
+    assert.deepEqual([mixed.data.topics, mixed.data.source], [['RAG, поиск и эмбеддинги', 'Голосовые агенты'], 'mixed'])
+
+    // Declined: only the questionnaire, and the answer holds for later runs
+    assert.deepEqual((await cli(['skill', 'personalize', '--file', file, '--reading', 'decline'])).data.topics, ['RAG, поиск и эмбеддинги'])
+    const later = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual([later.data.topics, later.data.reading, later.data.suggested], [['RAG, поиск и эмбеддинги'], 'declined', undefined])
+
+    // When nothing is left, the tail goes too
     interests = []
     inferredInterests = []
     const gone = await cli(['skill', 'personalize', '--file', file])
-    assert.deepEqual(gone.data, { personalized: true, changed: true, path: file, topics: [] })
+    assert.deepEqual(gone.data, { personalized: true, changed: true, path: file, topics: [], reading: 'declined' })
     assert.equal(await tail(), undefined)
     assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 0 })
     interests = questionnaire

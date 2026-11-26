@@ -243,7 +243,7 @@ export function profile(value: z.infer<typeof profileSchema>) {
   if (value.inferredInterests.length) {
     lines.push(
       '',
-      bold('From your reading (not saved):'),
+      bold('From your activity (not saved):'),
       ...value.inferredInterests.map(i => {
         const basis = i.basis.talks ? plural(i.basis.talks, 'talk') : plural(i.basis.episodes, 'search session')
 
@@ -380,15 +380,28 @@ export const personalizeSchema = z.object({
   path: z.string(),
   topics: z.array(z.string()),
   source: z.enum(['explicit', 'inferred', 'mixed']).optional(),
+  reading: z.enum(['agreed', 'declined', 'unasked']).optional(),
+  suggested: z.array(z.string()).optional(),
   reason: z.string().optional(),
   command: z.string().optional(),
 })
 
 export function personalize(value: z.infer<typeof personalizeSchema>) {
   if (!value.personalized) return `Could not write ${value.path}: ${printable(value.reason ?? '')}\nRun in your terminal: ${value.command ?? ''}`
-  const topics = value.topics.length ? value.topics.map(printable).join(', ') : 'no topics yet'
+  const topics = value.topics.map(printable).join(', ')
+  const from = value.source === 'inferred' ? ' (from your activity)' : value.source === 'mixed' ? ' (from your interests and activity)' : ''
 
-  const from = value.source === 'inferred' ? ' (from your reading)' : value.source === 'mixed' ? ' (from your interests and reading)' : ''
+  const result = !value.topics.length
+    ? value.changed
+      ? `Removed the personal topics from ${value.path}`
+      : `No topics for ${value.path} yet`
+    : value.changed
+      ? `Added your topics${from} to ${value.path}: ${topics}`
+      : `${value.path} already lists your topics${from}: ${topics}`
 
-  return value.changed ? `Added your topics${from} to ${value.path}: ${topics}` : `${value.path} already lists your topics${from}: ${topics}`
+  const offer = value.suggested?.length
+    ? `\nFrom your activity it would also add: ${value.suggested.map(printable).join(', ')}. Add them with --reading agree, or keep them out with --reading decline.`
+    : ''
+
+  return result + offer
 }

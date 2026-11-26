@@ -377,7 +377,8 @@ type SkillStatus = 'current' | 'outdated' | 'modified' | 'linked'
 // copy). The service counts in its analytics whether a personal tail is installed, never what it says
 const skillState = join(directory, 'skill.json')
 
-const skillStateSchema = z.object({ base: z.string(), file: z.string() })
+// `reading`: whether the user agreed to topics inferred from their reading in the tail; absent until they answer
+const skillStateSchema = z.object({ base: z.string(), file: z.string().optional(), reading: z.enum(['agreed', 'declined']).optional() })
 
 type SkillState = z.infer<typeof skillStateSchema>
 
@@ -415,7 +416,7 @@ async function copyTail(path: string): Promise<number | null> {
 /** Topics in the tail of the copies in the agent folders and the one personalize wrote (the most of any), or `none` */
 async function installedTail(): Promise<number | 'none'> {
   const state = await readState(skillState, skillStateSchema)
-  const paths = [...skillDirectories().map(folder => join(folder, 'SKILL.md')), ...(state ? [state.file] : [])]
+  const paths = [...skillDirectories().map(folder => join(folder, 'SKILL.md')), ...(state?.file ? [state.file] : [])]
   const real = new Set(await Promise.all(paths.map(path => realpath(path).catch(() => null))))
   const tails = (await Promise.all([...real].map(path => (path ? copyTail(path) : null)))).filter(tail => tail !== null)
 
@@ -445,8 +446,22 @@ function skillTailHeader(): Promise<string | null> {
 /** After `skill personalize`: remember a copy it could write and tell the service what happened. Never fails or waits long */
 type TailSource = 'explicit' | 'inferred' | 'mixed'
 
-async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number, source: TailSource | null) {
-  if (result !== 'write_failed') await saveJson(skillState, { base, file }).catch(() => {})
+type Reading = 'agreed' | 'declined'
+
+async function reportPersonalize(
+  file: string,
+  result: 'written' | 'unchanged' | 'write_failed',
+  topics: number,
+  source: TailSource | null,
+  reading: Reading | undefined
+) {
+  const previous = await readState(skillState, skillStateSchema)
+  const remembered = result === 'write_failed' ? previous?.file : file
+  // A new answer replaces the old one; without one the old answer stays. It is kept even when the file could not be written
+  const answer = reading ?? previous?.reading
+
+  if (remembered || answer)
+    await saveJson(skillState, { base, ...(remembered ? { file: remembered } : {}), ...(answer ? { reading: answer } : {}) }).catch(() => {})
   skillTailValue = undefined
   const body = source ? { result, topics, tail_source: source } : { result, topics }
   await request('/api/knowledge/skill/personalize', 'POST', body, true, { timeoutMs: 2000, retry: false }).catch(() => {})
@@ -1327,12 +1342,8 @@ const profileTopics = z.object({
   topics: z.array(z.object({ slug: z.string(), title: z.string(), section: z.string().nullable() })),
 })
 
-/**
- * Titles of the user's topics for the skill tail: strong interests first, subtopics before whole sections, then topics
- * inferred from their reading. An inferred topic already in the tail keeps its place, so a small change of weights
- * does not rewrite the file in every conversation.
- */
-async function personalTopics(current: string[]): Promise<{ explicit: string[]; inferred: string[] }> {
+/** Titles of the user's questionnaire topics, strong interests first, subtopics before whole sections, and of their inferred topics, strongest first */
+async function personalTopics(): Promise<{ explicit: string[]; inferred: string[] }> {
   const profile = profileTopics.parse(await request('/api/knowledge/profile'))
   const bySlug = new Map(profile.topics.map(t => [t.slug, t]))
 
@@ -1345,20 +1356,34 @@ async function personalTopics(current: string[]): Promise<{ explicit: string[]; 
     .sort((a, b) => a.order - b.order)
     .map(t => t.title)
 
+  const named = new Set(explicit.map(tailTitle))
+
   const inferred = [...profile.inferredInterests]
     .sort((a, b) => b.score - a.score)
     .flatMap(i => bySlug.get(i.topic)?.title ?? [])
-    .filter(title => !explicit.includes(title))
+    .filter(title => !named.has(tailTitle(title)))
 
-  const kept = (title: string) => current.indexOf(tailTitle(title))
-  const stable = [...inferred.filter(t => kept(t) >= 0).sort((a, b) => kept(a) - kept(b)), ...inferred.filter(t => kept(t) < 0)]
-
-  return { explicit, inferred: stable }
+  return { explicit, inferred }
 }
 
-function tailSource(topics: string[], inferred: string[]): TailSource | null {
+/**
+ * The tail: questionnaire topics, then the strongest inferred topics that fit. Among the inferred topics that fit, those
+ * already in the tail keep their order, so a small change of weights does not rewrite the file; a topic that no longer
+ * ranks among the ones that fit gives its place up.
+ */
+function tailWithReading(explicit: string[], inferred: string[], current: string[]): string[] {
+  const fit = new Set(tailTopics([...explicit, ...inferred]))
+  const chosen = inferred.filter(title => fit.has(tailTitle(title)))
+  const kept = (title: string) => current.indexOf(tailTitle(title))
+  const ordered = [...chosen.filter(t => kept(t) >= 0).sort((a, b) => kept(a) - kept(b)), ...chosen.filter(t => kept(t) < 0)]
+
+  return tailTopics([...explicit, ...ordered])
+}
+
+function tailSource(topics: string[], explicit: string[]): TailSource | null {
   if (!topics.length) return null
-  const fromReading = topics.filter(t => inferred.some(i => tailTitle(i) === t)).length
+  const named = new Set(explicit.map(tailTitle))
+  const fromReading = topics.filter(t => !named.has(t)).length
 
   return fromReading === 0 ? 'explicit' : fromReading === topics.length ? 'inferred' : 'mixed'
 }
@@ -1370,7 +1395,7 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
  * Adds the user's topics to the description of the skill copy the agent loaded, so the agent reaches for it on them too.
  * Only a SKILL.md of this skill is changed; a copy that cannot be written is reported with a command for the user.
  */
-async function personalizeSkill(o: { file: string }) {
+async function personalizeSkill(o: { file: string; reading?: string }) {
   const given = resolve(o.file)
   const file = basename(given) === 'SKILL.md' ? given : join(given, 'SKILL.md')
   let text: string
@@ -1385,15 +1410,23 @@ async function personalizeSkill(o: { file: string }) {
   const line = skillDescription(text)
 
   if (!line) throw new ApiError(`${file} has no description line`)
-  const { explicit, inferred } = await personalTopics(tailTitles(line))
-  const topics = tailTopics([...explicit, ...inferred])
-  const source = tailSource(topics, inferred)
+
+  if (o.reading !== undefined && o.reading !== 'agree' && o.reading !== 'decline') throw new ApiError('--reading takes agree or decline')
+  const answer: Reading | undefined = o.reading === 'agree' ? 'agreed' : o.reading === 'decline' ? 'declined' : undefined
+  const reading = answer ?? (await readState(skillState, skillStateSchema))?.reading
+  const { explicit, inferred } = await personalTopics()
+  const withReading = tailWithReading(explicit, inferred, tailTitles(line))
+  // Topics from reading go in only after the user agreed; until they answer, the output names what would be added
+  const topics = reading === 'agreed' ? withReading : tailTopics(explicit)
+  const suggested = reading ? [] : withReading.filter(t => !topics.includes(t))
+  const source = tailSource(topics, explicit)
   const next = personalDescription(line, topics)
+  const extra = { ...(source ? { source } : {}), reading: reading ?? 'unasked', ...(suggested.length ? { suggested } : {}) }
 
   if (next === line) {
-    await reportPersonalize(file, 'unchanged', topics.length, source)
+    await reportPersonalize(file, 'unchanged', topics.length, source, answer)
 
-    return { personalized: true, changed: false, path: file, topics, ...(source ? { source } : {}) }
+    return { personalized: true, changed: false, path: file, topics, ...extra }
   }
 
   const temporary = `${file}.${randomUUID()}.tmp`
@@ -1407,29 +1440,30 @@ async function personalizeSkill(o: { file: string }) {
     await rename(temporary, file)
   } catch (e) {
     await unlink(temporary).catch(() => {})
-    await reportPersonalize(file, 'write_failed', topics.length, source)
+    await reportPersonalize(file, 'write_failed', topics.length, source, answer)
 
     return {
       personalized: false,
       path: file,
       topics,
-      ...(source ? { source } : {}),
+      ...extra,
       reason: e instanceof Error ? e.message : 'Write failed',
       command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
     }
   }
 
-  await reportPersonalize(file, 'written', topics.length, source)
+  await reportPersonalize(file, 'written', topics.length, source, answer)
 
-  return { personalized: true, changed: true, path: file, topics, ...(source ? { source } : {}) }
+  return { personalized: true, changed: true, path: file, topics, ...extra }
 }
 
 skill
   .command('personalize')
   .description(
-    "Add the user's topics (ten words at most), from their interests and then from their reading, to the description of the skill copy at --file; requires login"
+    "Add the user's topics (ten words at most) to the description of the skill copy at --file: their interests, then topics from their reading once they agreed; requires login"
   )
   .requiredOption('--file <path>', 'SKILL.md of the loaded skill, or its folder')
+  .option('--reading <answer>', 'agree or decline: whether topics from their reading go into the tail; remembered on this machine')
   .action(run(personalizeSkill, view(text.personalizeSchema, text.personalize)))
 
 // The daily check runs after the command, so it never delays or breaks its output; doctor and skill report the same state themselves

@@ -51,7 +51,7 @@ giftsofprometheus feed                              # подборка по ва
 
 В той же папке лежит `client.json` со случайным идентификатором установки. CLI отправляет его заголовком `X-Client-Id`, чтобы сервис считал запросы без входа одним клиентом в аналитике. С аккаунтом он не связан, удалите файл, чтобы получить новый.
 
-Заголовок `X-Skill-Tail` сообщает сервису, сколько ваших тем `skill personalize` дописал в описание установленного skill (`none`, если CLI не нашёл копию). Сами темы и текст skill не отправляются. Путь к копии, которую последней записал `skill personalize`, CLI хранит в `skill.json` в той же папке. После `skill personalize` CLI также сообщает сервису, удалось ли записать файл и откуда взяты темы: из интересов, из прочитанного или из обоих.
+Заголовок `X-Skill-Tail` сообщает сервису, сколько ваших тем `skill personalize` дописал в описание установленного skill (`none`, если CLI не нашёл копию). Сами темы и текст skill не отправляются. Путь к копии, которую последней записал `skill personalize`, CLI хранит в `skill.json` в той же папке. После `skill personalize` CLI также сообщает сервису, удалось ли записать файл и откуда взяты темы: из интересов, из активности или из обоих. Согласие на темы из активности CLI хранит в том же `skill.json`.
 
 ## Для AI-агентов: Claude Code, Codex, Cursor
 
@@ -126,7 +126,7 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 | `talks react <slug-или-id> like\|dislike\|not-interested\|clear [--rec-id UUID]` | Отметить, понравился ли доклад; учитывается в подборке | ✓ |
 | `favorites list [--page n] [--limit n]` | Ваше избранное | ✓ |
 | `favorites add <slug-или-id>` / `remove` | Добавить в избранное или убрать | ✓ |
-| `profile get` | Ваши интересы, темы из прочитанного и текущая задача | ✓ |
+| `profile get` | Ваши интересы, темы из вашей активности и текущая задача | ✓ |
 | `profile update [--interest тема=уровень] [--remove-interest тема] [--query-text текст]` | Изменить интересы (`high`, `interested`, `not_interested`) или текущую задачу; остальное не меняется | ✓ |
 | `feed` | Подборка по вашему профилю | ✓ |
 | `request <путь>` | GET-запрос только на чтение к `/api/knowledge/…` или `/api/account/…`; печатает ответ сервиса как JSON | ✓ |
@@ -137,7 +137,7 @@ npx skills add giftsofprometheus/giftsofprometheus-cli
 | `login [--start\|--wait]`, `logout`, `whoami`, `doctor` | Вход, выход, текущий аккаунт, проверка настройки. `login --start` сразу печатает ссылку и код, `login --wait` ждёт подтверждения | |
 | `skill [--path]` | Skill для агента | |
 | `skill update [--force]` | Обновить установленные копии skill до версии CLI | |
-| `skill personalize --file <путь>` | Добавить ваши темы в описание skill: сначала из интересов, потом из прочитанного | ✓ |
+| `skill personalize --file <путь> [--reading agree\|decline]` | Добавить ваши темы в описание skill: интересы, а с вашего согласия и темы из вашей активности | ✓ |
 
 ## Настройки
 

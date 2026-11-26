@@ -2,9 +2,11 @@
 
 ## 0.10.0
 
-- `skill personalize` also uses `inferredInterests` of `profile get`, the topics the service infers from what the user read: questionnaire topics first, then inferred ones. An inferred topic already in the tail keeps its place, so new weights do not rewrite the file. When neither is left, the tail is removed. The output and the report to the service carry `source` / `tail_source`: `explicit`, `inferred` or `mixed`.
-- `profile get` shows the inferred topics under "From your reading (not saved)" with the number of talks or search sessions behind each.
-- Skill: when the skill has no tail yet and the profile has inferred topics, offer once to tune the skill to them, naming the topics, and personalize only after the user agrees. A skill that already has a tail is personalized without asking once per conversation after an answer from `ask`, `talks search` or `talks content`. When the user asks about their interests, show both kinds; `not_interested` keeps a topic out of the tail and the feed.
+- `skill personalize` can also add `inferredInterests` of `profile get`, the topics the service infers from the user's activity, after the questionnaire topics, once the user agreed: `--reading agree` or `--reading decline` records the answer in `skill.json` on this machine. Until then the output has `reading: "unasked"` and `suggested`, the titles that would be added; after a decline only the questionnaire is used.
+- Among the inferred topics that fit the ten words, those already in the tail keep their order, so new weights do not rewrite the file; a topic that no longer ranks among the ones that fit gives its place to a stronger one. When no topic is left, the tail is removed and the text output says so.
+- The output and the report to the service carry where the topics came from: `source` / `tail_source`, `explicit`, `inferred` or `mixed`.
+- `profile get` shows the inferred topics under "From your activity (not saved)" with the number of talks or search sessions behind each.
+- Skill: run `skill personalize` once per conversation after the first answer from `ask`, `talks search` or `talks content` for a signed-in user, and offer the `suggested` topics once, as the first of the Next steps offers. When the user asks about their interests, show both kinds; `not_interested` keeps a topic out of the topics from activity and lowers it in the feed.
 - Release after the service returns `inferredInterests` and accepts `tail_source` in `POST /api/knowledge/skill/personalize`: an older service rejects the report with the new field, and the report is dropped silently.
 
 ## 0.9.0

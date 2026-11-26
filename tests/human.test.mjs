@@ -145,7 +145,7 @@ test('without --json commands print text for a person; with --json the same comm
 
     const profile = await h.cli(['profile', 'get'])
     assert.match(profile.stdout, /Very interested:\n {2}Evals и бенчмарки\n/)
-    assert.match(profile.stdout, /From your reading \(not saved\):\n {2}RAG, поиск и эмбеддинги .*— 3 talks.*\n {2}Голосовые агенты .*— 2 search sessions/)
+    assert.match(profile.stdout, /From your activity \(not saved\):\n {2}RAG, поиск и эмбеддинги .*— 3 talks.*\n {2}Голосовые агенты .*— 2 search sessions/)
 
     const contentJson = await h.cli(['--json', 'talks', 'content', 'agents-building-agents'])
     assert.equal(
