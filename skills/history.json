@@ -116,7 +116,7 @@
   },
   {
     "version": "0.11.0",
-    "hash": "8367ad03a445b2d8",
+    "hash": "c06e74a9851f88e2",
     "description": "description: Find AI engineering talks from conferences around the world with Russian summaries, read their full transcripts, and manage the signed-in user's favorites, interests and personal feed through the giftsofprometheus CLI, and build a starting profile in the chat, and publish an answer as a page on the site. Use when the user asks for talks, speakers or transcripts on an AI engineering topic, wants to save, list or remove favorites on Gifts of Prometheus, or asks to publish or share an answer."
   }
 ]

@@ -201,11 +201,12 @@ async function request(
         error: z.string().optional(),
         code: z.string().optional(),
         nextStep: z.string().optional(),
-        findings: z
-          .array(z.object({ kind: z.string().max(40), excerpt: z.string().max(40), line: z.number() }))
-          .max(20)
-          .optional(),
       })
+      .safeParse(data)
+
+    // Read on their own: findings the CLI cannot read must not hide the error message and its code
+    const listed = z
+      .object({ findings: z.array(z.object({ kind: z.string().max(40), excerpt: z.string().max(40), line: z.number() })).max(20) })
       .safeParse(data)
 
     const code = failure.success ? failure.data.code : undefined
@@ -223,8 +224,8 @@ async function request(
     const message = failure.success ? failure.data.error_description || failure.data.error || `HTTP ${response.status}` : `HTTP ${response.status}`
     const nextStep = failure.success && failure.data.nextStep ? printable(failure.data.nextStep).slice(0, 500) : undefined
 
-    const findings = failure.success
-      ? failure.data.findings?.map(found => ({ kind: printable(found.kind), excerpt: printable(found.excerpt), line: found.line }))
+    const findings = listed.success
+      ? listed.data.findings.map(found => ({ kind: printable(found.kind), excerpt: printable(found.excerpt), line: found.line }))
       : undefined
 
     throw new ApiError(printable(message).slice(0, 500), response.status, code === undefined ? undefined : printable(code).slice(0, 100), nextStep, findings)
@@ -1455,9 +1456,11 @@ type AccessOptions = { visibility?: string; password?: string; confirmPublic?: b
 
 function accessBody(options: AccessOptions) {
   if (options.visibility && !['unlisted', 'password', 'public'].includes(options.visibility)) throw new ApiError('Access is one of: unlisted, password, public')
+  // A password alone means the password mode; with another mode the service refuses it
+  const visibility = options.visibility ?? (options.password ? 'password' : undefined)
 
   return {
-    ...(options.visibility ? { visibility: options.visibility } : {}),
+    ...(visibility ? { visibility } : {}),
     ...(options.password ? { password: options.password } : {}),
     ...(options.confirmPublic ? { confirmPublic: true } : {}),
   }
@@ -1475,13 +1478,14 @@ share
   .requiredOption('--file <path>', 'the answer in Markdown, or - for stdin')
   .action(
     run(async (options: { title: string; question: string; file: string }) => {
-      const result = await request(SHARES, 'POST', {
-        title: options.title,
-        question: options.question,
-        markdown: await answerMarkdown(options.file),
-        sourceAgent: detectedAgent(),
-        cliVersion: version,
-      })
+      // Never repeated: a repeat after a lost answer would leave a second draft
+      const result = await request(
+        SHARES,
+        'POST',
+        { title: options.title, question: options.question, markdown: await answerMarkdown(options.file), sourceAgent: detectedAgent(), cliVersion: version },
+        true,
+        { timeoutMs: 60_000, retry: false }
+      )
 
       hint(
         'Give the user previewUrl to check the draft. Publish only after the user agrees: share publish <id>',
@@ -1497,7 +1501,7 @@ share
   .description('Publish a draft: by default anyone with the link can open it, not search engines')
   .argument('<id>')
   .option('--visibility <mode>', 'unlisted (default), password or public')
-  .option('--password <password>', 'for --visibility password: at least 8 characters, chosen by the user')
+  .option('--password <password>', 'at least 8 characters, chosen by the user; implies --visibility password')
   .option('--confirm-public', 'for --visibility public: the user agreed that search engines index the page')
   .action(run((id: string, options: AccessOptions) => request(`${SHARES}/${shareId(id)}/publish`, 'POST', accessBody(options)), shareView))
 
@@ -1515,7 +1519,7 @@ share
   .command('get')
   .description('One page with its Markdown, for an update')
   .argument('<id>')
-  .action(run((id: string) => request(`${SHARES}/${shareId(id)}`)))
+  .action(run((id: string) => request(`${SHARES}/${shareId(id)}`), view(text.sharePageSchema, text.sharePage)))
 
 share
   .command('update')

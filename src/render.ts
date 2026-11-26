@@ -5,6 +5,10 @@ import { z } from 'zod'
 // oxlint-disable-next-line no-control-regex -- matching control characters is the purpose of this function
 export const printable = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
 
+/** Multi-line text such as Markdown: line breaks and tabs stay, other control characters go */
+// oxlint-disable-next-line no-control-regex -- control characters are what this removes, keeping only the line break and the tab
+export const printableLines = (value: string) => value.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+
 /** Like printable, but keeps line breaks: talk summaries are Markdown paragraphs and lists */
 const clean = (value: string) =>
   value
@@ -456,6 +460,13 @@ export function share(value: z.infer<typeof shareSchema>) {
   }
 
   return lines.join('\n')
+}
+
+export const sharePageSchema = shareSchema.extend({ question: z.string(), markdown: z.string() })
+
+/** One page with its question and Markdown, as `share update` takes them back */
+export function sharePage(value: z.infer<typeof sharePageSchema>) {
+  return [share(value), '', `${bold('Question:')} ${printable(value.question)}`, '', printableLines(value.markdown)].join('\n')
 }
 
 export function shareList(value: z.infer<typeof shareListSchema>, empty: string) {
