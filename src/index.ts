@@ -448,7 +448,19 @@ type TailSource = 'explicit' | 'inferred' | 'mixed'
 
 type Reading = 'agreed' | 'declined'
 
-async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number, source: TailSource | null) {
+/** What a run tells the service besides its result: counts and the consent state, never the topics themselves */
+type PersonalizeReport = {
+  topics: number
+  source: TailSource | null
+  reading: Reading | 'unasked'
+  answer?: 'agree' | 'decline'
+  suggested: number
+  added: number
+  removed: number
+  unavailable: boolean
+}
+
+async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', report: PersonalizeReport) {
   const previous = await readState(skillState, skillStateSchema)
   const remembered = result === 'write_failed' ? previous?.file : file
   // The answer was saved before the tail was built; only the remembered copy changes here
@@ -457,7 +469,19 @@ async function reportPersonalize(file: string, result: 'written' | 'unchanged' |
   if (remembered || answer)
     await saveJson(skillState, { base, ...(remembered ? { file: remembered } : {}), ...(answer ? { reading: answer } : {}) }).catch(() => {})
   skillTailValue = undefined
-  const body = source ? { result, topics, tail_source: source } : { result, topics }
+
+  const body = {
+    result,
+    topics: report.topics,
+    ...(report.source ? { tail_source: report.source } : {}),
+    reading: report.reading,
+    ...(report.answer ? { answer: report.answer } : {}),
+    suggested: report.suggested,
+    // A tail that could not be written did not change
+    ...(result === 'write_failed' ? {} : { added: report.added, removed: report.removed }),
+    ...(report.unavailable ? { inferred_unavailable: true } : {}),
+  }
+
   await request('/api/knowledge/skill/personalize', 'POST', body, true, { timeoutMs: 2000, retry: false }).catch(() => {})
 }
 
@@ -1493,8 +1517,19 @@ async function personalizeLocked(path: string, answer: Reading | undefined) {
   const next = personalDescription(line, topics)
   const extra = { ...(source ? { source } : {}), reading: reading ?? 'unasked', ...(suggested.length ? { suggested } : {}) }
 
+  const report: PersonalizeReport = {
+    topics: topics.length,
+    source,
+    reading: reading ?? 'unasked',
+    ...(answer ? { answer: answer === 'agreed' ? ('agree' as const) : ('decline' as const) } : {}),
+    suggested: suggested.length,
+    added: topics.filter(t => !current.includes(t)).length,
+    removed: current.filter(t => !topics.includes(t)).length,
+    unavailable,
+  }
+
   if (next === line) {
-    await reportPersonalize(file, 'unchanged', topics.length, source)
+    await reportPersonalize(file, 'unchanged', report)
 
     return { personalized: true, changed: false, path: file, topics, ...extra }
   }
@@ -1510,7 +1545,7 @@ async function personalizeLocked(path: string, answer: Reading | undefined) {
     await rename(temporary, file)
   } catch (e) {
     await unlink(temporary).catch(() => {})
-    await reportPersonalize(file, 'write_failed', topics.length, source)
+    await reportPersonalize(file, 'write_failed', report)
 
     return {
       personalized: false,
@@ -1523,7 +1558,7 @@ async function personalizeLocked(path: string, answer: Reading | undefined) {
     }
   }
 
-  await reportPersonalize(file, 'written', topics.length, source)
+  await reportPersonalize(file, 'written', report)
 
   return { personalized: true, changed: true, path: file, topics, ...extra }
 }

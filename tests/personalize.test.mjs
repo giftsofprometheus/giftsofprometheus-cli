@@ -161,10 +161,10 @@ test('react records what the user said, and personalize rewrites only the loaded
       path: '/api/knowledge/skill/personalize',
       method: 'POST',
       tail: '2',
-      body: { result: 'written', topics: 2, tail_source: 'explicit' },
+      body: { result: 'written', topics: 2, tail_source: 'explicit', reading: 'unasked', suggested: 0, added: 2, removed: 0 },
     })
     assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false, 'running it again changes nothing')
-    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2, tail_source: 'explicit' })
+    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2, tail_source: 'explicit', reading: 'unasked', suggested: 0, added: 0, removed: 0 })
     // The copy is remembered, so later commands carry its tail without a new personalize
     await cli(['talks', 'react', 'good', 'like'])
     assert.equal(requests.at(-1).tail, '2')
@@ -204,6 +204,7 @@ test('react records what the user said, and personalize rewrites only the loaded
       reading: 'unasked',
       suggested: ['Evals и бенчмарки', 'RAG, поиск и эмбеддинги'],
     })
+    assert.equal(requests.at(-1).body.suggested, 2)
     assert.equal(await tail(), undefined, 'nothing from reading is written before the user agrees')
     assert.equal((await cli(['skill', 'personalize', '--file', file, '--reading', 'maybe'])).code, 1)
 
@@ -216,7 +217,16 @@ test('react records what the user said, and personalize rewrites only the loaded
       source: 'inferred',
       reading: 'agreed',
     })
-    assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 2, tail_source: 'inferred' })
+    assert.deepEqual(requests.at(-1).body, {
+      result: 'written',
+      topics: 2,
+      tail_source: 'inferred',
+      reading: 'agreed',
+      answer: 'agree',
+      suggested: 0,
+      added: 2,
+      removed: 0,
+    })
 
     // The answer is remembered; new weights among the topics that fit do not reorder the tail
     inferredInterests = [
@@ -245,6 +255,7 @@ test('react records what the user said, and personalize rewrites only the loaded
     unavailable = true
     const kept = await cli(['skill', 'personalize', '--file', file])
     assert.deepEqual([kept.data.changed, kept.data.topics], [false, ['RAG, поиск и эмбеддинги', 'Голосовые агенты']])
+    assert.equal(requests.at(-1).body.inferred_unavailable, true)
     unavailable = false
     inferredInterests = saved
 
@@ -288,7 +299,7 @@ test('react records what the user said, and personalize rewrites only the loaded
     const gone = await cli(['skill', 'personalize', '--file', file])
     assert.deepEqual(gone.data, { personalized: true, changed: true, path: file, topics: [], reading: 'declined' })
     assert.equal(await tail(), undefined)
-    assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 0 })
+    assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 0, reading: 'declined', suggested: 0, added: 0, removed: 1 })
     interests = questionnaire
     inferredInterests = undefined
 
@@ -309,7 +320,7 @@ test('react records what the user said, and personalize rewrites only the loaded
         path: '/api/knowledge/skill/personalize',
         method: 'POST',
         tail: '0',
-        body: { result: 'write_failed', topics: 2, tail_source: 'explicit' },
+        body: { result: 'write_failed', topics: 2, tail_source: 'explicit', reading: 'declined', suggested: 0 },
       })
 
       // An answer given with a copy that cannot be written is saved anyway, and the command for the user keeps it
