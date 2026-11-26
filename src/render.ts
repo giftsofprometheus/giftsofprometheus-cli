@@ -219,9 +219,12 @@ export function topicTree(value: z.infer<typeof topicsSchema>) {
 
 export const profileSchema = z.object({
   interests: z.array(z.object({ topic: z.string().optional(), level: z.enum(['high', 'interested', 'not_interested']) })),
+  inferredInterests: z.array(z.object({ topic: z.string(), basis: z.object({ talks: z.number(), episodes: z.number() }) })).default([]),
   queryText: z.string(),
   topics: z.array(topicSchema).default([]),
 })
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
 const levelNames = { high: 'Very interested', interested: 'Interested', not_interested: 'Not interested' } as const
 
@@ -236,6 +239,18 @@ export function profile(value: z.infer<typeof profileSchema>) {
   }
 
   if (!value.interests.length) lines.push('', dim('No interests yet. Set them with: profile update --interest <topic>=interested'))
+
+  if (value.inferredInterests.length) {
+    lines.push(
+      '',
+      bold('From your reading (not saved):'),
+      ...value.inferredInterests.map(i => {
+        const basis = i.basis.talks ? plural(i.basis.talks, 'talk') : plural(i.basis.episodes, 'search session')
+
+        return `  ${printable(titles.get(i.topic) ?? i.topic)} ${dim(`— ${basis}`)}`
+      })
+    )
+  }
 
   return lines.join('\n')
 }
@@ -364,6 +379,7 @@ export const personalizeSchema = z.object({
   changed: z.boolean().optional(),
   path: z.string(),
   topics: z.array(z.string()),
+  source: z.enum(['explicit', 'inferred', 'mixed']).optional(),
   reason: z.string().optional(),
   command: z.string().optional(),
 })
@@ -372,5 +388,7 @@ export function personalize(value: z.infer<typeof personalizeSchema>) {
   if (!value.personalized) return `Could not write ${value.path}: ${printable(value.reason ?? '')}\nRun in your terminal: ${value.command ?? ''}`
   const topics = value.topics.length ? value.topics.map(printable).join(', ') : 'no topics yet'
 
-  return value.changed ? `Added your topics to ${value.path}: ${topics}` : `${value.path} already lists your topics: ${topics}`
+  const from = value.source === 'inferred' ? ' (from your reading)' : value.source === 'mixed' ? ' (from your interests and reading)' : ''
+
+  return value.changed ? `Added your topics${from} to ${value.path}: ${topics}` : `${value.path} already lists your topics${from}: ${topics}`
 }

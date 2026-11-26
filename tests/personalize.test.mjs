@@ -49,6 +49,18 @@ test('react records what the user said, and personalize rewrites only the loaded
   const requests = []
   let hang = false
 
+  const questionnaire = [
+    { topic: 'quality', level: 'interested' },
+    { topic: 'voice', level: 'not_interested' },
+    { topic: 'evals', level: 'interested' },
+    { topic: 'rag', level: 'high' },
+    { level: 'high' },
+  ]
+
+  let interests = questionnaire
+  // A service before inferred interests sends none
+  let inferredInterests
+
   const server = createServer((request, response) => {
     let body = ''
     request.on('data', chunk => (body += chunk))
@@ -60,13 +72,8 @@ test('react records what the user said, and personalize rewrites only the loaded
       else if (request.url === '/api/knowledge/profile')
         response.end(
           JSON.stringify({
-            interests: [
-              { topic: 'quality', level: 'interested' },
-              { topic: 'voice', level: 'not_interested' },
-              { topic: 'evals', level: 'interested' },
-              { topic: 'rag', level: 'high' },
-              { level: 'high' },
-            ],
+            interests,
+            ...(inferredInterests ? { inferredInterests } : {}),
             queryText: '',
             topics: [
               { slug: 'quality', title: 'Качество', section: null },
@@ -139,11 +146,16 @@ test('react records what the user said, and personalize rewrites only the loaded
 
     const done = await cli(['skill', 'personalize', '--file', folder])
     assert.equal(done.code, 0, JSON.stringify(done.data))
-    assert.deepEqual(done.data, { personalized: true, changed: true, path: file, topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'] })
+    assert.deepEqual(done.data, { personalized: true, changed: true, path: file, topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'], source: 'explicit' })
     assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock} Also good for RAG, поиск и эмбеддинги; Evals и бенчмарки.\n---\nBody\n`)
-    assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '2', body: { result: 'written', topics: 2 } })
+    assert.deepEqual(requests.at(-1), {
+      path: '/api/knowledge/skill/personalize',
+      method: 'POST',
+      tail: '2',
+      body: { result: 'written', topics: 2, tail_source: 'explicit' },
+    })
     assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false, 'running it again changes nothing')
-    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2 })
+    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2, tail_source: 'explicit' })
     // The copy is remembered, so later commands carry its tail without a new personalize
     await cli(['talks', 'react', 'good', 'like'])
     assert.equal(requests.at(-1).tail, '2')
@@ -166,6 +178,43 @@ test('react records what the user said, and personalize rewrites only the loaded
     assert.equal(requests.at(-1).tail, '10')
     await rm(agentCopy, { recursive: true })
 
+    // No questionnaire: the tail comes from reading; an inferred topic already in the tail keeps its place
+    const tail = async () => (await readFile(file, 'utf8')).match(/Also good for (.*)\.\n/)?.[1]
+    await writeFile(file, '---\nname: giftsofprometheus\n' + stock + '\n---\nBody\n')
+    interests = []
+    inferredInterests = [
+      { topic: 'evals', score: 1, basis: { talks: 3, episodes: 0 } },
+      { topic: 'rag', score: 0.6, basis: { talks: 2, episodes: 0 } },
+    ]
+    const fromReading = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual(fromReading.data, {
+      personalized: true,
+      changed: true,
+      path: file,
+      topics: ['Evals и бенчмарки', 'RAG, поиск и эмбеддинги'],
+      source: 'inferred',
+    })
+    assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 2, tail_source: 'inferred' })
+    inferredInterests = [
+      { topic: 'rag', score: 1, basis: { talks: 4, episodes: 0 } },
+      { topic: 'evals', score: 0.9, basis: { talks: 3, episodes: 0 } },
+    ]
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false, 'new weights do not reorder the tail')
+    assert.equal(await tail(), 'Evals и бенчмарки; RAG, поиск и эмбеддинги')
+    // The questionnaire comes first; a topic in both is named once
+    interests = [{ topic: 'rag', level: 'interested' }]
+    const mixed = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual([mixed.data.topics, mixed.data.source], [['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'], 'mixed'])
+    // When the signal is gone, the tail goes too
+    interests = []
+    inferredInterests = []
+    const gone = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual(gone.data, { personalized: true, changed: true, path: file, topics: [] })
+    assert.equal(await tail(), undefined)
+    assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 0 })
+    interests = questionnaire
+    inferredInterests = undefined
+
     const other = join(config, 'other.md')
     await writeFile(other, `---\nname: something-else\n${stock}\n---\n`)
     assert.equal((await cli(['skill', 'personalize', '--file', other])).code, 1, 'another skill is never touched')
@@ -179,7 +228,12 @@ test('react records what the user said, and personalize rewrites only the loaded
       assert.equal(blocked.data.personalized, false)
       assert.match(blocked.data.command, /skill personalize --file '.*SKILL\.md'$/)
       assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock}\n---\nBody\n`, 'a failed write leaves the file as it was')
-      assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '0', body: { result: 'write_failed', topics: 2 } })
+      assert.deepEqual(requests.at(-1), {
+        path: '/api/knowledge/skill/personalize',
+        method: 'POST',
+        tail: '0',
+        body: { result: 'write_failed', topics: 2, tail_source: 'explicit' },
+      })
     }
   } finally {
     server.closeAllConnections()

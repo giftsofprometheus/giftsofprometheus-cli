@@ -51,6 +51,20 @@ const routes = {
   'GET /api/knowledge/talks?q=-foo&page=1': { recId, items: [talk], page: 1, totalPages: 2, total: 30 },
   'GET /api/knowledge/favorites?page=1&limit=1': { items: [talk], page: 1, totalPages: 2, total: 2 },
   'GET /api/knowledge/feed': { recId, items: [{ ...talk, reason: 'Похоже на ваши интересы' }] },
+  'GET /api/knowledge/profile': {
+    interests: [{ topic: 'evals', level: 'high' }],
+    inferredInterests: [
+      { topic: 'rag', score: 1, basis: { talks: 3, episodes: 0 } },
+      { topic: 'voice', score: 0.6, basis: { talks: 0, episodes: 2 } },
+    ],
+    queryText: '',
+    topics: [
+      { slug: 'evals', title: 'Evals и бенчмарки', section: 'quality' },
+      { slug: 'rag', title: 'RAG, поиск и эмбеддинги', section: 'data' },
+      { slug: 'voice', title: 'Голосовые агенты', section: 'interfaces' },
+    ],
+    needsOnboarding: false,
+  },
   'GET /api/knowledge/raw': { text: 'a\u009b31mb' },
   'GET /api/knowledge/talks/evil': { ...talk, id: 8, slug: 'ev\u009b31mil' },
   'POST /api/knowledge/talks/renamed/content': { title: 'Renamed', speakers: [], chapters: [], segments: [], transcriptSegments: 5 },
@@ -128,6 +142,10 @@ test('without --json commands print text for a person; with --json the same comm
     assert.match(content.stdout, /## Введение\n\[1:00\] So today we will see\.\n\n## Архитектура\n\[2:00\] An agent is an LLM in a loop\.\n$/)
 
     assert.equal((await h.cli(['favorites', 'add', 'agents-building-agents'])).stdout, 'Saved agents-building-agents to favorites.\n')
+
+    const profile = await h.cli(['profile', 'get'])
+    assert.match(profile.stdout, /Very interested:\n {2}Evals и бенчмарки\n/)
+    assert.match(profile.stdout, /From your reading \(not saved\):\n {2}RAG, поиск и эмбеддинги .*— 3 talks.*\n {2}Голосовые агенты .*— 2 search sessions/)
 
     const contentJson = await h.cli(['--json', 'talks', 'content', 'agents-building-agents'])
     assert.equal(

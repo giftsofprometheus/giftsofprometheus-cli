@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- `skill personalize` also uses `inferredInterests` of `profile get`, the topics the service infers from what the user read: questionnaire topics first, then inferred ones. An inferred topic already in the tail keeps its place, so new weights do not rewrite the file. When neither is left, the tail is removed. The output and the report to the service carry `source` / `tail_source`: `explicit`, `inferred` or `mixed`.
+- `profile get` shows the inferred topics under "From your reading (not saved)" with the number of talks or search sessions behind each.
+- Skill: when the skill has no tail yet and the profile has inferred topics, offer once to tune the skill to them, naming the topics, and personalize only after the user agrees. A skill that already has a tail is personalized without asking once per conversation after an answer from `ask`, `talks search` or `talks content`. When the user asks about their interests, show both kinds; `not_interested` keeps a topic out of the tail and the feed.
+- Release after the service returns `inferredInterests` and accepts `tail_source` in `POST /api/knowledge/skill/personalize`: an older service rejects the report with the new field, and the report is dropped silently.
+
 ## 0.9.0
 
 - Each request sends `X-Skill-Tail`: the number of topics in the personal tail of the installed skill (`0` without a tail), or `none` when the CLI finds no copy it can read. Each run reads the first 8 KB of the copies in the agent folders of the home and the current folder, and of the copy `skill personalize` last wrote (its path is kept in `skill.json`, 0600); after 500 ms without an answer the header is left out. The topics themselves are not sent.

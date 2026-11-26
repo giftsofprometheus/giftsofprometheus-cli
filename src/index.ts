@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailCount, tailTopics } from './skill-files.js'
+import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailCount, tailTitle, tailTitles, tailTopics } from './skill-files.js'
 import * as text from './render.js'
 import { printable } from './render.js'
 
@@ -443,10 +443,13 @@ function skillTailHeader(): Promise<string | null> {
 }
 
 /** After `skill personalize`: remember a copy it could write and tell the service what happened. Never fails or waits long */
-async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number) {
+type TailSource = 'explicit' | 'inferred' | 'mixed'
+
+async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number, source: TailSource | null) {
   if (result !== 'write_failed') await saveJson(skillState, { base, file }).catch(() => {})
   skillTailValue = undefined
-  await request('/api/knowledge/skill/personalize', 'POST', { result, topics }, true, { timeoutMs: 2000, retry: false }).catch(() => {})
+  const body = source ? { result, topics, tail_source: source } : { result, topics }
+  await request('/api/knowledge/skill/personalize', 'POST', body, true, { timeoutMs: 2000, retry: false }).catch(() => {})
 }
 
 // Where agents and `npx skills add` keep personal and project skills
@@ -1072,7 +1075,7 @@ const profile = program.command('profile').description('Read or update interests
 
 profile
   .command('get')
-  .description('Show interests and the current task')
+  .description('Show interests, topics inferred from reading and the current task')
   .action(run(() => request('/api/knowledge/profile'), view(text.profileSchema, text.profile)))
 
 const levels = z.enum(['high', 'interested', 'not_interested'])
@@ -1319,15 +1322,21 @@ skill
 
 const profileTopics = z.object({
   interests: z.array(z.object({ topic: z.string().optional(), level: z.enum(['high', 'interested', 'not_interested']) })),
+  // A service before inferred interests sends none
+  inferredInterests: z.array(z.object({ topic: z.string(), score: z.number() })).default([]),
   topics: z.array(z.object({ slug: z.string(), title: z.string(), section: z.string().nullable() })),
 })
 
-/** Titles of the user's topics for the skill tail: strong interests first, subtopics before whole sections */
-async function personalTopics(): Promise<string[]> {
+/**
+ * Titles of the user's topics for the skill tail: strong interests first, subtopics before whole sections, then topics
+ * inferred from their reading. An inferred topic already in the tail keeps its place, so a small change of weights
+ * does not rewrite the file in every conversation.
+ */
+async function personalTopics(current: string[]): Promise<{ explicit: string[]; inferred: string[] }> {
   const profile = profileTopics.parse(await request('/api/knowledge/profile'))
   const bySlug = new Map(profile.topics.map(t => [t.slug, t]))
 
-  return profile.interests
+  const explicit = profile.interests
     .flatMap(i => {
       const topic = i.topic === undefined ? undefined : bySlug.get(i.topic)
 
@@ -1335,6 +1344,23 @@ async function personalTopics(): Promise<string[]> {
     })
     .sort((a, b) => a.order - b.order)
     .map(t => t.title)
+
+  const inferred = [...profile.inferredInterests]
+    .sort((a, b) => b.score - a.score)
+    .flatMap(i => bySlug.get(i.topic)?.title ?? [])
+    .filter(title => !explicit.includes(title))
+
+  const kept = (title: string) => current.indexOf(tailTitle(title))
+  const stable = [...inferred.filter(t => kept(t) >= 0).sort((a, b) => kept(a) - kept(b)), ...inferred.filter(t => kept(t) < 0)]
+
+  return { explicit, inferred: stable }
+}
+
+function tailSource(topics: string[], inferred: string[]): TailSource | null {
+  if (!topics.length) return null
+  const fromReading = topics.filter(t => inferred.some(i => tailTitle(i) === t)).length
+
+  return fromReading === 0 ? 'explicit' : fromReading === topics.length ? 'inferred' : 'mixed'
 }
 
 // A command the user can paste into their own terminal, where the file may be writable
@@ -1359,13 +1385,15 @@ async function personalizeSkill(o: { file: string }) {
   const line = skillDescription(text)
 
   if (!line) throw new ApiError(`${file} has no description line`)
-  const topics = tailTopics(await personalTopics())
+  const { explicit, inferred } = await personalTopics(tailTitles(line))
+  const topics = tailTopics([...explicit, ...inferred])
+  const source = tailSource(topics, inferred)
   const next = personalDescription(line, topics)
 
   if (next === line) {
-    await reportPersonalize(file, 'unchanged', topics.length)
+    await reportPersonalize(file, 'unchanged', topics.length, source)
 
-    return { personalized: true, changed: false, path: file, topics }
+    return { personalized: true, changed: false, path: file, topics, ...(source ? { source } : {}) }
   }
 
   const temporary = `${file}.${randomUUID()}.tmp`
@@ -1379,25 +1407,28 @@ async function personalizeSkill(o: { file: string }) {
     await rename(temporary, file)
   } catch (e) {
     await unlink(temporary).catch(() => {})
-    await reportPersonalize(file, 'write_failed', topics.length)
+    await reportPersonalize(file, 'write_failed', topics.length, source)
 
     return {
       personalized: false,
       path: file,
       topics,
+      ...(source ? { source } : {}),
       reason: e instanceof Error ? e.message : 'Write failed',
       command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
     }
   }
 
-  await reportPersonalize(file, 'written', topics.length)
+  await reportPersonalize(file, 'written', topics.length, source)
 
-  return { personalized: true, changed: true, path: file, topics }
+  return { personalized: true, changed: true, path: file, topics, ...(source ? { source } : {}) }
 }
 
 skill
   .command('personalize')
-  .description("Add the user's topics (ten words at most) to the description of the skill copy at --file; requires login")
+  .description(
+    "Add the user's topics (ten words at most), from their interests and then from their reading, to the description of the skill copy at --file; requires login"
+  )
   .requiredOption('--file <path>', 'SKILL.md of the loaded skill, or its folder')
   .action(run(personalizeSkill, view(text.personalizeSchema, text.personalize)))
 

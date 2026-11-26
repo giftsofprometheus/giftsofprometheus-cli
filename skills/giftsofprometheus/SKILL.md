@@ -74,9 +74,10 @@ After answering, offer one next step in a short line, matched to where the user 
 - After the transcript or a discussion of it: talks like this one (`talks similar`); show titles with their `reason`.
 - When the user says a talk was useful: saving it to favorites. Save only after they agree.
 - When the user is signed in and asked two or more questions in this conversation: run `profile get` once (a read). If `queryText` is empty, offer to save a one-line task built from their own words, in their language, so the feed follows it. Show the exact text and run `profile update --query-text` only after they agree. Offer it once per conversation.
+- From the same `profile get`: when the description of this skill has no "Also good for" tail and `inferredInterests` is not empty, offer once per conversation to tune this skill to the topics of their reading. Name up to three of them by their title from `topics`, in their language, for example "Учитывать «RAG, поиск и эмбеддинги» и «Evals и бенчмарки» в следующих разговорах?". Run `skill personalize` (see Personal topics) only after they agree; if they decline, do not offer it again in this conversation.
 - After you answered a question with `ask` or `talks search` for a signed-in user: their personal feed, once per conversation and only when the conversation has not shown it yet. Offer it in one line and run `feed` only after they agree. Show the titles with their `reason`; when the user picks a talk from it, open that talk with the `recId` of that feed. The feed leaves out talks whose transcript they read recently.
 
-The task offer comes before the feed. Make at most one of these offers per message, and never in the same message as the Feedback question.
+The task offer comes first, then the skill offer, then the feed. Make at most one of these offers per message, and never in the same message as the Feedback question.
 
 Commands print the suggested next command on stderr. It is a hint for you; do not run a change without the user.
 
@@ -94,10 +95,17 @@ giftsofprometheus --json talks react <slug-or-id> like|dislike|not-interested|cl
 
 ## Personal topics
 
-After `onboarding finish` or a `profile update` that changed interests, run `giftsofprometheus --json skill personalize --file <path of this SKILL.md>` with the path you loaded this skill from. It adds the user's topics, ten words at most, to this skill's description, so the next conversations reach for talks on those topics too. Do not ask first; it changes only this skill file.
+`giftsofprometheus --json skill personalize --file <path of this SKILL.md>`, with the path you loaded this skill from, adds the user's topics, ten words at most, to this skill's description, so the next conversations reach for talks on those topics too. It takes the questionnaire first, then `inferredInterests`, the topics of what they read; `source` in the output says which (`explicit`, `inferred` or `mixed`). It changes only this skill file. Run it without asking:
+
+- after `onboarding finish` or a `profile update` that changed interests;
+- when this skill's description already has an "Also good for" tail: once per conversation, after you answered a signed-in user with `ask`, `talks search` or `talks content`, so the tail follows their reading.
+
+A first tail from reading alone needs the user's agreement in Next steps.
 
 - `personalized: true`: tell the user in two or three words, for example "Skill tuned to your topics." Say nothing when `changed` is `false`.
 - `personalized: false`: the file could not be written. Tell the user in one line and give them `command` from the output to run in their terminal.
+
+When the user asks what their interests are, run `profile get` and show the questionnaire by level, then `inferredInterests` as topics from their reading with their basis (`talks` read, or `episodes` of search); these are not saved. To keep a topic out of both the tail and the feed, the user can mark it `not_interested` with `profile update`; `--remove-interest` removes only a questionnaire topic.
 
 ## Onboarding
 
