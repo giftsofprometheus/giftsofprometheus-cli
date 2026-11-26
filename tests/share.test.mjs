@@ -32,7 +32,10 @@ test('share commands call the account API with the answer, the access mode and t
       requests.push({ path: request.url, method: request.method, body: parsed })
       response.setHeader('Content-Type', 'application/json')
 
-      if (request.method === 'POST' && request.url === '/api/account/shared-answers' && parsed.markdown.includes('sk-')) {
+      if (request.method === 'POST' && request.url === '/api/account/shared-answers' && parsed.markdown.includes('GATEWAY')) {
+        response.statusCode = 502
+        response.end('{}')
+      } else if (request.method === 'POST' && request.url === '/api/account/shared-answers' && parsed.markdown.includes('sk-')) {
         response.statusCode = 422
         response.end(JSON.stringify({ error: 'Секреты', code: 'shared_answer_secrets', findings: [{ kind: 'openai_key', excerpt: 'sk-pro…', line: 2 }] }))
       } else response.end(JSON.stringify({ ...page, previewUrl: page.url }))
@@ -91,6 +94,12 @@ test('share commands call the account API with the answer, the access mode and t
       body: { visibility: 'password', password: 'long-enough' },
     })
 
+    await cli(['share', 'publish', page.id, '--password', 'long-enough'])
+    assert.deepEqual(requests.at(-1).body, { visibility: 'password', password: 'long-enough' }, 'a password alone means the password mode')
+
+    await cli(['share', 'publish', page.id, '--password', ''])
+    assert.deepEqual(requests.at(-1).body, { visibility: 'password', password: '' }, 'an empty password goes to the service to be refused')
+
     await cli(['share', 'visibility', page.id, 'public', '--confirm-public'])
     assert.deepEqual(requests.at(-1), {
       path: `/api/account/shared-answers/${page.id}/visibility`,
@@ -108,6 +117,12 @@ test('share commands call the account API with the answer, the access mode and t
 
     const badMode = await cli(['share', 'visibility', page.id, 'everyone'])
     assert.equal(badMode.code, 1)
+
+    await writeFile(file, 'GATEWAY')
+    const before = requests.length
+    const lost = await cli(['share', 'create', '--title', 'T', '--question', 'Q', '--file', file])
+    assert.equal(lost.code, 1)
+    assert.equal(requests.length, before + 1, 'an upload is never repeated, so a lost answer leaves no second draft')
 
     await writeFile(file, 'строка\nключ sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx')
     const refused = await cli(['share', 'create', '--title', 'T', '--question', 'Q', '--file', file])

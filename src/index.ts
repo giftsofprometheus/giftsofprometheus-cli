@@ -1457,11 +1457,12 @@ type AccessOptions = { visibility?: string; password?: string; confirmPublic?: b
 function accessBody(options: AccessOptions) {
   if (options.visibility && !['unlisted', 'password', 'public'].includes(options.visibility)) throw new ApiError('Access is one of: unlisted, password, public')
   // A password alone means the password mode; with another mode the service refuses it
-  const visibility = options.visibility ?? (options.password ? 'password' : undefined)
+  // An empty --password (an unset variable) is sent as is, so the service refuses it instead of publishing without one
+  const visibility = options.visibility ?? (options.password !== undefined ? 'password' : undefined)
 
   return {
     ...(visibility ? { visibility } : {}),
-    ...(options.password ? { password: options.password } : {}),
+    ...(options.password !== undefined ? { password: options.password } : {}),
     ...(options.confirmPublic ? { confirmPublic: true } : {}),
   }
 }
@@ -1530,15 +1531,16 @@ share
   .option('--file <path>', 'new answer in Markdown, or - for stdin')
   .action(
     run(async (id: string, options: { title?: string; question?: string; file?: string }) => {
+      // An empty value is sent too: the service refuses it rather than the CLI dropping it silently
       const body = {
-        ...(options.title ? { title: options.title } : {}),
-        ...(options.question ? { question: options.question } : {}),
-        ...(options.file ? { markdown: await answerMarkdown(options.file) } : {}),
+        ...(options.title !== undefined ? { title: options.title } : {}),
+        ...(options.question !== undefined ? { question: options.question } : {}),
+        ...(options.file !== undefined ? { markdown: await answerMarkdown(options.file) } : {}),
       }
 
       if (!Object.keys(body).length) throw new ApiError('Pass --title, --question or --file')
 
-      return request(`${SHARES}/${shareId(id)}`, 'PATCH', body)
+      return request(`${SHARES}/${shareId(id)}`, 'PATCH', body, true, { timeoutMs: 60_000 })
     }, shareView)
   )
 
