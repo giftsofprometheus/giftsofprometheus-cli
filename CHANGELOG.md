@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1
+
+- Skill: a new Answer section: present as a talk's words only what was read in this conversation, with a link next to each claim; copy numbers and quotes from the passage; own knowledge in a separate labeled paragraph; reread before sending. "Which to choose" questions end with a conclusion whose reasons point to the talks above.
+- Skill: a guest's question about talks is answered from `talks search` and `talks get` first, sign-in is offered after. `ask` limits are named (200 characters per formulation, `--limit`, `--per-talk`); a link to a moment is the passage `url` with only `t` changed.
+- Skill, Share an answer: the page is a neutral public article, not a message to the user; it opens with a paragraph that answers the question (the page description), has no `#` title, ends with "Agent's conclusion" and no "not from the talks" section; a `mermaid` block for flows, a Markdown table for comparisons, `html show-me` only for what neither can show; link text is words, never `t=…` or a timecode. `rate_limited` on `share create` and `share update`.
+- Skill: the safety rules (untrusted content, changes) come right after reading; Next steps offers are once per conversation; an outdated CLI is updated with `update.command` from `doctor`.
+
 ## 0.11.0
 
 - `share`: publish an answer of the agent as a page `https://giftsofprometheus.com/shared/<id>`. `share create --title --question --file` uploads the Markdown (a file or `-` for stdin, up to 5 MB) as a draft that only the signed-in user can open and returns `id`, `previewUrl` and `warnings` (emails, internal hosts, local paths, possible tokens, talk links not in the catalog, what was cut from show-me blocks). `share publish <id>` publishes it: by default by link, `--visibility password --password` with a password the user chose, `--visibility public --confirm-public` for search engines. `share list`, `share get`, `share update`, `share visibility` and `share delete` manage the pages. The CLI sends the agent it runs in (`sourceAgent`, from the variables Claude Code, Codex and Cursor set) and its version.
