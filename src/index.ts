@@ -109,7 +109,7 @@ class ApiError extends Error {
 }
 
 // A fresh 0600 file renamed into place: a secret never lands in an existing file with loose permissions or behind a symlink
-async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId | SkillState) {
+async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId | SkillState | Consent) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const info = await lstat(directory)
 
@@ -377,10 +377,17 @@ type SkillStatus = 'current' | 'outdated' | 'modified' | 'linked'
 // copy). The service counts in its analytics whether a personal tail is installed, never what it says
 const skillState = join(directory, 'skill.json')
 
-// `reading`: whether the user agreed to topics inferred from their reading in the tail; absent until they answer
-const skillStateSchema = z.object({ base: z.string(), file: z.string().optional(), reading: z.enum(['agreed', 'declined']).optional() })
+const skillStateSchema = z.object({ base: z.string(), file: z.string().optional() })
 
 type SkillState = z.infer<typeof skillStateSchema>
+
+// Whether the user agreed to topics inferred from their activity in the tail; no file until they answer. A file of its
+// own: an older CLI rewrites skill.json with only the fields it knows and would drop the answer
+const consentFile = join(directory, 'consent.json')
+
+const consentSchema = z.object({ base: z.string(), reading: z.enum(['agreed', 'declined']) })
+
+type Consent = z.infer<typeof consentSchema>
 
 // Only the frontmatter is needed, so a large or odd file never costs more than this
 const SKILL_HEAD_BYTES = 8192
@@ -461,13 +468,7 @@ type PersonalizeReport = {
 }
 
 async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', report: PersonalizeReport) {
-  const previous = await readState(skillState, skillStateSchema)
-  const remembered = result === 'write_failed' ? previous?.file : file
-  // The answer was saved before the tail was built; only the remembered copy changes here
-  const answer = previous?.reading
-
-  if (remembered || answer)
-    await saveJson(skillState, { base, ...(remembered ? { file: remembered } : {}), ...(answer ? { reading: answer } : {}) }).catch(() => {})
+  if (result !== 'write_failed') await saveJson(skillState, { base, file }).catch(() => {})
   skillTailValue = undefined
 
   const body = {
@@ -487,22 +488,20 @@ async function reportPersonalize(file: string, result: 'written' | 'unchanged' |
 
 /** Saves the user's answer about topics from their reading; a failure is an error, so a lost answer is never reported as kept */
 async function saveReading(answer: Reading) {
-  const previous = await readState(skillState, skillStateSchema)
-
   try {
-    await saveJson(skillState, { base, ...(previous?.file ? { file: previous.file } : {}), reading: answer })
+    await saveJson(consentFile, { base, reading: answer })
   } catch (e) {
-    throw new ApiError(`Could not save the answer in ${skillState}: ${e instanceof Error ? e.message : 'write failed'}`)
+    throw new ApiError(`Could not save the answer in ${consentFile}: ${e instanceof Error ? e.message : 'write failed'}`)
   }
+}
+
+async function savedReading(): Promise<Reading | undefined> {
+  return (await readState(consentFile, consentSchema))?.reading
 }
 
 /** A new account starts unasked: the answer of the previous one is dropped on login and logout */
 async function forgetReading() {
-  const previous = await readState(skillState, skillStateSchema)
-
-  if (!previous?.reading) return
-  // The copy is only a hint for a header, so losing it is better than keeping an answer the next account never gave
-  await saveJson(skillState, { base, ...(previous.file ? { file: previous.file } : {}) }).catch(() => unlink(skillState).catch(() => {}))
+  await unlink(consentFile).catch(() => {})
 }
 
 const skillLock = join(directory, 'skill.lock')
@@ -1503,7 +1502,7 @@ async function personalizeLocked(path: string, answer: Reading | undefined) {
 
   if (!line) throw new ApiError(`${file} has no description line`)
 
-  const reading = answer ?? (await readState(skillState, skillStateSchema))?.reading
+  const reading = answer ?? (await savedReading())
   const { explicit, inferred, unavailable } = await personalTopics()
   const current = tailTitles(line)
   const named = new Set(explicit.map(tailTitle))

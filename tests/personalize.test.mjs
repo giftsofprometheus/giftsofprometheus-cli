@@ -276,7 +276,7 @@ test('react records what the user said, and personalize rewrites only the loaded
     assert.deepEqual([later.data.topics, later.data.reading, later.data.suggested], [['RAG, поиск и эмбеддинги'], 'declined', undefined])
 
     // An answer that cannot be saved is an error, and the tail stays as it was
-    const state = join(config, 'giftsofprometheus', 'skill.json')
+    const state = join(config, 'giftsofprometheus', 'consent.json')
     const before = await readFile(file, 'utf8')
     const savedState = await readFile(state, 'utf8')
     await rm(state)
@@ -286,6 +286,10 @@ test('react records what the user said, and personalize rewrites only the loaded
     assert.equal(await readFile(file, 'utf8'), before)
     await rm(state, { recursive: true })
     await writeFile(state, savedState)
+
+    // An older CLI rewrites skill.json with only the fields it knows: the answer lives elsewhere and survives
+    await writeFile(join(config, 'giftsofprometheus', 'skill.json'), JSON.stringify({ base, file }))
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.reading, 'declined')
 
     // Logout and login drop the answer: the next account is asked again
     assert.equal((await cli(['logout'])).code, 0)
@@ -328,7 +332,7 @@ test('react records what the user said, and personalize rewrites only the loaded
       const agreedBlocked = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
       await chmod(folder, 0o700)
       assert.match(agreedBlocked.data.command, /--file '.*SKILL[.]md' --reading agree$/)
-      assert.equal(JSON.parse(await readFile(join(config, 'giftsofprometheus', 'skill.json'), 'utf8')).reading, 'agreed')
+      assert.equal(JSON.parse(await readFile(join(config, 'giftsofprometheus', 'consent.json'), 'utf8')).reading, 'agreed')
     }
   } finally {
     server.closeAllConnections()
