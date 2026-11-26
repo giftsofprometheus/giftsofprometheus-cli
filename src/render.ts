@@ -405,3 +405,66 @@ export function personalize(value: z.infer<typeof personalizeSchema>) {
 
   return result + offer
 }
+
+const shareWarningSchema = z.object({ kind: z.string(), excerpt: z.string() })
+
+export const shareSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  status: z.string(),
+  visibility: z.string(),
+  hasPassword: z.boolean(),
+  title: z.string(),
+  talks: z.number(),
+  warnings: z.array(shareWarningSchema),
+  updatedAt: z.string(),
+  expiresAt: z.string().optional(),
+})
+
+export const shareListSchema = z.object({ items: z.array(shareSchema) })
+
+const WARNING_KINDS = new Map([
+  ['email', 'email'],
+  ['internal_host', 'internal host'],
+  ['local_path', 'local path'],
+  ['token', 'possible token'],
+  ['unknown_talk', 'talk not in the catalog'],
+  ['show_me_removed', 'removed from show-me'],
+])
+
+const ACCESS = new Map([
+  ['unlisted', 'anyone with the link'],
+  ['password', 'link and password'],
+  ['public', 'public, indexed by search engines'],
+])
+
+/** One shared answer: where it is, who can open it and what the upload check found */
+export function share(value: z.infer<typeof shareSchema>) {
+  const lines = [
+    `${bold(printable(value.title))}`,
+    `${value.status === 'draft' ? 'Draft (only you can open it)' : `Published, ${ACCESS.get(value.visibility) ?? printable(value.visibility)}`}: ${printable(value.url)}`,
+  ]
+
+  if (value.expiresAt) lines.push(dim(`Deleted on ${value.expiresAt.slice(0, 10)} unless published`))
+
+  if (value.talks) lines.push(dim(`Cites ${value.talks} catalog talk${value.talks === 1 ? '' : 's'}`))
+
+  if (value.warnings.length) {
+    lines.push('', value.status === 'draft' ? 'Check before publishing:' : 'The upload check found:')
+
+    for (const warning of value.warnings) lines.push(`  ${WARNING_KINDS.get(warning.kind) ?? printable(warning.kind)}: ${printable(warning.excerpt)}`)
+  }
+
+  return lines.join('\n')
+}
+
+export function shareList(value: z.infer<typeof shareListSchema>, empty: string) {
+  if (!value.items.length) return empty
+
+  return value.items
+    .map(
+      item =>
+        `${bold(printable(item.title))}\n  ${item.status === 'draft' ? 'draft' : printable(item.visibility)} · ${printable(item.url)} · ${item.updatedAt.slice(0, 10)}`
+    )
+    .join('\n')
+}
