@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, utimes, writeFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -60,6 +60,7 @@ test('react records what the user said, and personalize rewrites only the loaded
   let interests = questionnaire
   // A service before inferred interests sends none
   let inferredInterests
+  let unavailable = false
 
   const server = createServer((request, response) => {
     let body = ''
@@ -74,6 +75,7 @@ test('react records what the user said, and personalize rewrites only the loaded
           JSON.stringify({
             interests,
             ...(inferredInterests ? { inferredInterests } : {}),
+            ...(unavailable ? { inferredUnavailable: true } : {}),
             queryText: '',
             topics: [
               { slug: 'quality', title: 'Качество', section: null },
@@ -237,10 +239,48 @@ test('react records what the user said, and personalize rewrites only the loaded
     const mixed = await cli(['skill', 'personalize', '--file', file])
     assert.deepEqual([mixed.data.topics, mixed.data.source], [['RAG, поиск и эмбеддинги', 'Голосовые агенты'], 'mixed'])
 
+    // The service could not compute topics this time: the ones from reading stay in the tail
+    const saved = inferredInterests
+    inferredInterests = []
+    unavailable = true
+    const kept = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual([kept.data.changed, kept.data.topics], [false, ['RAG, поиск и эмбеддинги', 'Голосовые агенты']])
+    unavailable = false
+    inferredInterests = saved
+
+    // Two runs at once and a lock left by a dead run: both finish, and no lock stays
+    const lock = join(config, 'giftsofprometheus', 'skill.lock')
+    await writeFile(lock, '')
+    await utimes(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000))
+    const both = await Promise.all([cli(['skill', 'personalize', '--file', file]), cli(['skill', 'personalize', '--file', file])])
+    assert.deepEqual(
+      both.map(r => r.code),
+      [0, 0]
+    )
+    await assert.rejects(readFile(lock), { code: 'ENOENT' })
+
     // Declined: only the questionnaire, and the answer holds for later runs
     assert.deepEqual((await cli(['skill', 'personalize', '--file', file, '--reading', 'decline'])).data.topics, ['RAG, поиск и эмбеддинги'])
     const later = await cli(['skill', 'personalize', '--file', file])
     assert.deepEqual([later.data.topics, later.data.reading, later.data.suggested], [['RAG, поиск и эмбеддинги'], 'declined', undefined])
+
+    // An answer that cannot be saved is an error, and the tail stays as it was
+    const state = join(config, 'giftsofprometheus', 'skill.json')
+    const before = await readFile(file, 'utf8')
+    const savedState = await readFile(state, 'utf8')
+    await rm(state)
+    await mkdir(state)
+    const unsaved = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
+    assert.equal(unsaved.code, 1)
+    assert.equal(await readFile(file, 'utf8'), before)
+    await rm(state, { recursive: true })
+    await writeFile(state, savedState)
+
+    // Logout and login drop the answer: the next account is asked again
+    assert.equal((await cli(['logout'])).code, 0)
+    await writeFile(join(config, 'giftsofprometheus', 'credentials.json'), JSON.stringify({ base, token: 'secret' }), { mode: 0o600 })
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.reading, 'unasked')
+    assert.equal((await cli(['skill', 'personalize', '--file', file, '--reading', 'decline'])).data.reading, 'declined')
 
     // When nothing is left, the tail goes too
     interests = []
@@ -271,6 +311,13 @@ test('react records what the user said, and personalize rewrites only the loaded
         tail: '0',
         body: { result: 'write_failed', topics: 2, tail_source: 'explicit' },
       })
+
+      // An answer given with a copy that cannot be written is saved anyway, and the command for the user keeps it
+      await chmod(folder, 0o500)
+      const agreedBlocked = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
+      await chmod(folder, 0o700)
+      assert.match(agreedBlocked.data.command, /--file '.*SKILL[.]md' --reading agree$/)
+      assert.equal(JSON.parse(await readFile(join(config, 'giftsofprometheus', 'skill.json'), 'utf8')).reading, 'agreed')
     }
   } finally {
     server.closeAllConnections()

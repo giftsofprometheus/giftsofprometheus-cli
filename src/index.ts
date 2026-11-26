@@ -448,23 +448,78 @@ type TailSource = 'explicit' | 'inferred' | 'mixed'
 
 type Reading = 'agreed' | 'declined'
 
-async function reportPersonalize(
-  file: string,
-  result: 'written' | 'unchanged' | 'write_failed',
-  topics: number,
-  source: TailSource | null,
-  reading: Reading | undefined
-) {
+async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number, source: TailSource | null) {
   const previous = await readState(skillState, skillStateSchema)
   const remembered = result === 'write_failed' ? previous?.file : file
-  // A new answer replaces the old one; without one the old answer stays. It is kept even when the file could not be written
-  const answer = reading ?? previous?.reading
+  // The answer was saved before the tail was built; only the remembered copy changes here
+  const answer = previous?.reading
 
   if (remembered || answer)
     await saveJson(skillState, { base, ...(remembered ? { file: remembered } : {}), ...(answer ? { reading: answer } : {}) }).catch(() => {})
   skillTailValue = undefined
   const body = source ? { result, topics, tail_source: source } : { result, topics }
   await request('/api/knowledge/skill/personalize', 'POST', body, true, { timeoutMs: 2000, retry: false }).catch(() => {})
+}
+
+/** Saves the user's answer about topics from their reading; a failure is an error, so a lost answer is never reported as kept */
+async function saveReading(answer: Reading) {
+  const previous = await readState(skillState, skillStateSchema)
+
+  try {
+    await saveJson(skillState, { base, ...(previous?.file ? { file: previous.file } : {}), reading: answer })
+  } catch (e) {
+    throw new ApiError(`Could not save the answer in ${skillState}: ${e instanceof Error ? e.message : 'write failed'}`)
+  }
+}
+
+/** A new account starts unasked: the answer of the previous one is dropped on login and logout */
+async function forgetReading() {
+  const previous = await readState(skillState, skillStateSchema)
+
+  if (!previous?.reading) return
+  // The copy is only a hint for a header, so losing it is better than keeping an answer the next account never gave
+  await saveJson(skillState, { base, ...(previous.file ? { file: previous.file } : {}) }).catch(() => unlink(skillState).catch(() => {}))
+}
+
+const skillLock = join(directory, 'skill.lock')
+
+// A lock older than this belongs to a run that died; personalize itself takes a few seconds at most
+const SKILL_LOCK_STALE_MS = 30_000
+
+const SKILL_LOCK_WAIT_MS = 10_000
+
+/** One personalize at a time on this machine: the answer and the tail are read and written inside, so a late run never undoes a newer answer */
+async function withSkillLock<T>(work: () => Promise<T>): Promise<T> {
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  const deadline = Date.now() + SKILL_LOCK_WAIT_MS
+
+  for (;;) {
+    try {
+      await (await open(skillLock, 'wx', 0o600)).close()
+      break
+    } catch (e) {
+      if (!(e instanceof Error && 'code' in e && e.code === 'EEXIST')) throw e
+
+      const age = await stat(skillLock).then(
+        info => Date.now() - info.mtimeMs,
+        () => SKILL_LOCK_STALE_MS + 1
+      )
+
+      if (age > SKILL_LOCK_STALE_MS) {
+        await unlink(skillLock).catch(() => {})
+        continue
+      }
+
+      if (Date.now() > deadline) throw new ApiError('Another skill personalize is running; try again in a few seconds')
+      await sleep(100)
+    }
+  }
+
+  try {
+    return await work()
+  } finally {
+    await unlink(skillLock).catch(() => {})
+  }
 }
 
 // Where agents and `npx skills add` keep personal and project skills
@@ -681,6 +736,7 @@ async function waitLogin(device: DeviceLogin) {
 
       await saveJson(credentials, { base, token: token.access_token })
       await unlink(pendingLogin).catch(() => {})
+      await forgetReading()
 
       return { signedIn: true, expiresIn: token.expires_in }
     } catch (e) {
@@ -780,6 +836,7 @@ program
         }
 
         await unlink(credentials).catch(() => {})
+        await forgetReading()
 
         return { signedOut: true }
       },
@@ -1339,11 +1396,13 @@ const profileTopics = z.object({
   interests: z.array(z.object({ topic: z.string().optional(), level: z.enum(['high', 'interested', 'not_interested']) })),
   // A service before inferred interests sends none
   inferredInterests: z.array(z.object({ topic: z.string(), score: z.number() })).default([]),
+  // The service could not compute them this time: the list is empty, but it does not mean «no topics»
+  inferredUnavailable: z.literal(true).optional(),
   topics: z.array(z.object({ slug: z.string(), title: z.string(), section: z.string().nullable() })),
 })
 
 /** Titles of the user's questionnaire topics, strong interests first, subtopics before whole sections, and of their inferred topics, strongest first */
-async function personalTopics(): Promise<{ explicit: string[]; inferred: string[] }> {
+async function personalTopics(): Promise<{ explicit: string[]; inferred: string[]; unavailable: boolean }> {
   const profile = profileTopics.parse(await request('/api/knowledge/profile'))
   const bySlug = new Map(profile.topics.map(t => [t.slug, t]))
 
@@ -1363,7 +1422,7 @@ async function personalTopics(): Promise<{ explicit: string[]; inferred: string[
     .flatMap(i => bySlug.get(i.topic)?.title ?? [])
     .filter(title => !named.has(tailTitle(title)))
 
-  return { explicit, inferred }
+  return { explicit, inferred, unavailable: profile.inferredUnavailable === true }
 }
 
 /**
@@ -1396,7 +1455,16 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
  * Only a SKILL.md of this skill is changed; a copy that cannot be written is reported with a command for the user.
  */
 async function personalizeSkill(o: { file: string; reading?: string }) {
-  const given = resolve(o.file)
+  if (o.reading !== undefined && o.reading !== 'agree' && o.reading !== 'decline') throw new ApiError('--reading takes agree or decline')
+  const answer: Reading | undefined = o.reading === 'agree' ? 'agreed' : o.reading === 'decline' ? 'declined' : undefined
+
+  return withSkillLock(() => personalizeLocked(o.file, answer))
+}
+
+async function personalizeLocked(path: string, answer: Reading | undefined) {
+  // The answer is kept first, before the network and the file: a run that fails later still remembers it
+  if (answer) await saveReading(answer)
+  const given = resolve(path)
   const file = basename(given) === 'SKILL.md' ? given : join(given, 'SKILL.md')
   let text: string
 
@@ -1411,11 +1479,13 @@ async function personalizeSkill(o: { file: string; reading?: string }) {
 
   if (!line) throw new ApiError(`${file} has no description line`)
 
-  if (o.reading !== undefined && o.reading !== 'agree' && o.reading !== 'decline') throw new ApiError('--reading takes agree or decline')
-  const answer: Reading | undefined = o.reading === 'agree' ? 'agreed' : o.reading === 'decline' ? 'declined' : undefined
   const reading = answer ?? (await readState(skillState, skillStateSchema))?.reading
-  const { explicit, inferred } = await personalTopics()
-  const withReading = tailWithReading(explicit, inferred, tailTitles(line))
+  const { explicit, inferred, unavailable } = await personalTopics()
+  const current = tailTitles(line)
+  const named = new Set(explicit.map(tailTitle))
+  // When the service could not compute the topics, the ones from reading already in the tail stay as they are
+  const fromReading = unavailable ? current.filter(title => !named.has(title)) : inferred
+  const withReading = tailWithReading(explicit, fromReading, current)
   // Topics from reading go in only after the user agreed; until they answer, the output names what would be added
   const topics = reading === 'agreed' ? withReading : tailTopics(explicit)
   const suggested = reading ? [] : withReading.filter(t => !topics.includes(t))
@@ -1424,7 +1494,7 @@ async function personalizeSkill(o: { file: string; reading?: string }) {
   const extra = { ...(source ? { source } : {}), reading: reading ?? 'unasked', ...(suggested.length ? { suggested } : {}) }
 
   if (next === line) {
-    await reportPersonalize(file, 'unchanged', topics.length, source, answer)
+    await reportPersonalize(file, 'unchanged', topics.length, source)
 
     return { personalized: true, changed: false, path: file, topics, ...extra }
   }
@@ -1440,7 +1510,7 @@ async function personalizeSkill(o: { file: string; reading?: string }) {
     await rename(temporary, file)
   } catch (e) {
     await unlink(temporary).catch(() => {})
-    await reportPersonalize(file, 'write_failed', topics.length, source, answer)
+    await reportPersonalize(file, 'write_failed', topics.length, source)
 
     return {
       personalized: false,
@@ -1448,11 +1518,12 @@ async function personalizeSkill(o: { file: string; reading?: string }) {
       topics,
       ...extra,
       reason: e instanceof Error ? e.message : 'Write failed',
-      command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
+      // The answer is already saved, but the flag keeps the command the same as the one the user agreed to
+      command: `${cmd()} skill personalize --file ${shellQuote(file)}${answer ? ` --reading ${answer === 'agreed' ? 'agree' : 'decline'}` : ''}`,
     }
   }
 
-  await reportPersonalize(file, 'written', topics.length, source, answer)
+  await reportPersonalize(file, 'written', topics.length, source)
 
   return { personalized: true, changed: true, path: file, topics, ...extra }
 }

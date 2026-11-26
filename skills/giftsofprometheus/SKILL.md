@@ -70,14 +70,14 @@ giftsofprometheus --json profile get                       # interests, topics f
 
 After answering, offer one next step in a short line, matched to where the user is. Offer each kind at most once per talk, and skip it when the user is busy with something else:
 
-- When `skill personalize` (see Personal topics) returned `reading: "unasked"` and `suggested`: tuning this skill to the topics of their activity. Name exactly the `suggested` titles, in their language, for example "Учитывать «RAG, поиск и эмбеддинги» в следующих разговорах?". When they agree, run the same command with `--reading agree`; when they decline, with `--reading decline`. The answer is remembered on this machine: do not ask again.
+- When `skill personalize` (see Personal topics) returned `reading: "unasked"` and `suggested`: tuning this skill to the topics of their activity, now and later. Name exactly the `suggested` titles, in their language, and say the topics will follow their activity, for example "Настроить скилл на темы из твоей активности? Сейчас это «RAG, поиск и эмбеддинги», дальше темы будут меняться вслед за ней." When they agree, run the same command with `--reading agree`; when they decline, with `--reading decline`. The answer is remembered on this machine until logout. If they ignore the offer, drop it for this conversation.
 - After a summary (`talks get`): the full transcript.
 - After the transcript or a discussion of it: talks like this one (`talks similar`); show titles with their `reason`.
 - When the user says a talk was useful: saving it to favorites. Save only after they agree.
 - When the user is signed in and asked two or more questions in this conversation: run `profile get` once (a read). If `queryText` is empty, offer to save a one-line task built from their own words, in their language, so the feed follows it. Show the exact text and run `profile update --query-text` only after they agree. Offer it once per conversation.
 - After you answered a question with `ask` or `talks search` for a signed-in user: their personal feed, once per conversation and only when the conversation has not shown it yet. Offer it in one line and run `feed` only after they agree. Show the titles with their `reason`; when the user picks a talk from it, open that talk with the `recId` of that feed. The feed leaves out talks whose transcript they read recently.
 
-The skill offer comes first, then the task offer, then the feed. Make at most one of these offers per message, and never in the same message as the Feedback question.
+The skill offer comes first, then the task offer, then the feed. Make at most one of these offers per message, and never in the same message as the Feedback question; when both are due, make the offer and ask the Feedback question in a later message.
 
 Commands print the suggested next command on stderr. It is a hint for you; do not run a change without the user.
 
@@ -98,13 +98,16 @@ giftsofprometheus --json talks react <slug-or-id> like|dislike|not-interested|cl
 `giftsofprometheus --json skill personalize --file <path of this SKILL.md>`, with the path you loaded this skill from, adds the user's topics, ten words at most, to this skill's description, so the next conversations reach for talks on those topics too. It takes the questionnaire topics, then, once the user agreed, the topics of their activity (`inferredInterests`: talks they opened, read, saved or liked, or their passage searches). `source` in the output says where the topics came from (`explicit`, `inferred` or `mixed`). It changes only this skill file. Run it without asking, without `--reading`:
 
 - after `onboarding finish` or a `profile update` that changed interests;
-- once per conversation for a signed-in user, after your first answer that used `ask`, `talks search` or `talks content`.
+- once per conversation for a signed-in user, before you finish your first answer that used `ask`, `talks search` or `talks content`, so an offer can close that answer. If that run gave neither `topics` nor `suggested`, run it once more after you open another transcript in this conversation.
 
-Pass `--reading agree` or `--reading decline` only with the user's answer to the offer in Next steps.
+Pass `--reading agree` or `--reading decline` only with the user's answer to the offer in Next steps. With `--reading agree` the user can also turn their activity back on after declining.
+
+The run after an answer is in the background: say nothing about it except the offer. After `onboarding finish`, a `profile update` or the user's answer to the offer:
 
 - `personalized: true` and `changed: true` with `topics`: tell the user in two or three words, for example "Skill tuned to your topics." Say nothing when `changed` is `false` or `topics` is empty.
-- `reading: "unasked"` with `suggested`: offer it in Next steps.
 - `personalized: false`: the file could not be written. Tell the user in one line and give them `command` from the output to run in their terminal.
+
+After any run, `reading: "unasked"` with `suggested`: offer it in Next steps.
 
 When the user asks what their interests are, run `profile get` and show the questionnaire by level, then `inferredInterests` as topics from their activity with their basis (`talks`, or `episodes` of search); these are not saved. Marking a topic `not_interested` with `profile update` keeps it out of the topics from activity and lowers talks on it in the feed; `--remove-interest` removes only a questionnaire topic. To stop using their activity in this skill, run `skill personalize` with `--reading decline`.
 
