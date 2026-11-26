@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmod, mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, utimes, writeFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -49,6 +49,19 @@ test('react records what the user said, and personalize rewrites only the loaded
   const requests = []
   let hang = false
 
+  const questionnaire = [
+    { topic: 'quality', level: 'interested' },
+    { topic: 'voice', level: 'not_interested' },
+    { topic: 'evals', level: 'interested' },
+    { topic: 'rag', level: 'high' },
+    { level: 'high' },
+  ]
+
+  let interests = questionnaire
+  // A service before inferred interests sends none
+  let inferredInterests
+  let unavailable = false
+
   const server = createServer((request, response) => {
     let body = ''
     request.on('data', chunk => (body += chunk))
@@ -60,13 +73,9 @@ test('react records what the user said, and personalize rewrites only the loaded
       else if (request.url === '/api/knowledge/profile')
         response.end(
           JSON.stringify({
-            interests: [
-              { topic: 'quality', level: 'interested' },
-              { topic: 'voice', level: 'not_interested' },
-              { topic: 'evals', level: 'interested' },
-              { topic: 'rag', level: 'high' },
-              { level: 'high' },
-            ],
+            interests,
+            ...(inferredInterests ? { inferredInterests } : {}),
+            ...(unavailable ? { inferredUnavailable: true } : {}),
             queryText: '',
             topics: [
               { slug: 'quality', title: 'Качество', section: null },
@@ -139,11 +148,23 @@ test('react records what the user said, and personalize rewrites only the loaded
 
     const done = await cli(['skill', 'personalize', '--file', folder])
     assert.equal(done.code, 0, JSON.stringify(done.data))
-    assert.deepEqual(done.data, { personalized: true, changed: true, path: file, topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'] })
+    assert.deepEqual(done.data, {
+      personalized: true,
+      changed: true,
+      path: file,
+      topics: ['RAG, поиск и эмбеддинги', 'Evals и бенчмарки'],
+      source: 'explicit',
+      reading: 'unasked',
+    })
     assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock} Also good for RAG, поиск и эмбеддинги; Evals и бенчмарки.\n---\nBody\n`)
-    assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '2', body: { result: 'written', topics: 2 } })
+    assert.deepEqual(requests.at(-1), {
+      path: '/api/knowledge/skill/personalize',
+      method: 'POST',
+      tail: '2',
+      body: { result: 'written', topics: 2, tail_source: 'explicit', reading: 'unasked', suggested: 0, added: 2, removed: 0 },
+    })
     assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false, 'running it again changes nothing')
-    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2 })
+    assert.deepEqual(requests.at(-1).body, { result: 'unchanged', topics: 2, tail_source: 'explicit', reading: 'unasked', suggested: 0, added: 0, removed: 0 })
     // The copy is remembered, so later commands carry its tail without a new personalize
     await cli(['talks', 'react', 'good', 'like'])
     assert.equal(requests.at(-1).tail, '2')
@@ -166,6 +187,126 @@ test('react records what the user said, and personalize rewrites only the loaded
     assert.equal(requests.at(-1).tail, '10')
     await rm(agentCopy, { recursive: true })
 
+    // No questionnaire: topics from reading are only suggested until the user agrees
+    const tail = async () => (await readFile(file, 'utf8')).match(/Also good for (.*)\.\n/)?.[1]
+    await writeFile(file, '---\nname: giftsofprometheus\n' + stock + '\n---\nBody\n')
+    interests = []
+    inferredInterests = [
+      { topic: 'evals', score: 1, basis: { talks: 3, episodes: 0 } },
+      { topic: 'rag', score: 0.6, basis: { talks: 2, episodes: 0 } },
+    ]
+    const asked = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual(asked.data, {
+      personalized: true,
+      changed: false,
+      path: file,
+      topics: [],
+      reading: 'unasked',
+      suggested: ['Evals и бенчмарки', 'RAG, поиск и эмбеддинги'],
+    })
+    assert.equal(requests.at(-1).body.suggested, 2)
+    assert.equal(await tail(), undefined, 'nothing from reading is written before the user agrees')
+    assert.equal((await cli(['skill', 'personalize', '--file', file, '--reading', 'maybe'])).code, 1)
+
+    const agreed = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
+    assert.deepEqual(agreed.data, {
+      personalized: true,
+      changed: true,
+      path: file,
+      topics: ['Evals и бенчмарки', 'RAG, поиск и эмбеддинги'],
+      source: 'inferred',
+      reading: 'agreed',
+    })
+    assert.deepEqual(requests.at(-1).body, {
+      result: 'written',
+      topics: 2,
+      tail_source: 'inferred',
+      reading: 'agreed',
+      answer: 'agree',
+      suggested: 0,
+      added: 2,
+      removed: 0,
+    })
+
+    // The answer is remembered; new weights among the topics that fit do not reorder the tail
+    inferredInterests = [
+      { topic: 'rag', score: 1, basis: { talks: 4, episodes: 0 } },
+      { topic: 'evals', score: 0.9, basis: { talks: 3, episodes: 0 } },
+    ]
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.changed, false)
+    assert.equal(await tail(), 'Evals и бенчмарки; RAG, поиск и эмбеддинги')
+
+    // A stronger new topic takes the place of one that no longer fits; the one that still fits keeps its place
+    inferredInterests = [
+      { topic: 'voice', score: 1, basis: { talks: 5, episodes: 0 } },
+      { topic: 'evals', score: 0.9, basis: { talks: 3, episodes: 0 } },
+      { topic: 'rag', score: 0.5, basis: { talks: 2, episodes: 0 } },
+    ]
+    assert.deepEqual((await cli(['skill', 'personalize', '--file', file])).data.topics, ['Evals и бенчмарки', 'Голосовые агенты'])
+
+    // The questionnaire comes first; a topic in both is named once
+    interests = [{ topic: 'rag', level: 'interested' }]
+    const mixed = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual([mixed.data.topics, mixed.data.source], [['RAG, поиск и эмбеддинги', 'Голосовые агенты'], 'mixed'])
+
+    // The service could not compute topics this time: the ones from reading stay in the tail
+    const saved = inferredInterests
+    inferredInterests = []
+    unavailable = true
+    const kept = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual([kept.data.changed, kept.data.topics], [false, ['RAG, поиск и эмбеддинги', 'Голосовые агенты']])
+    assert.equal(requests.at(-1).body.inferred_unavailable, true)
+    unavailable = false
+    inferredInterests = saved
+
+    // Two runs at once and a lock left by a dead run: both finish, and no lock stays
+    const lock = join(config, 'giftsofprometheus', 'skill.lock')
+    await writeFile(lock, '')
+    await utimes(lock, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000))
+    const both = await Promise.all([cli(['skill', 'personalize', '--file', file]), cli(['skill', 'personalize', '--file', file])])
+    assert.deepEqual(
+      both.map(r => r.code),
+      [0, 0]
+    )
+    await assert.rejects(readFile(lock), { code: 'ENOENT' })
+
+    // Declined: only the questionnaire, and the answer holds for later runs
+    assert.deepEqual((await cli(['skill', 'personalize', '--file', file, '--reading', 'decline'])).data.topics, ['RAG, поиск и эмбеддинги'])
+    const later = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual([later.data.topics, later.data.reading, later.data.suggested], [['RAG, поиск и эмбеддинги'], 'declined', undefined])
+
+    // An answer that cannot be saved is an error, and the tail stays as it was
+    const state = join(config, 'giftsofprometheus', 'consent.json')
+    const before = await readFile(file, 'utf8')
+    const savedState = await readFile(state, 'utf8')
+    await rm(state)
+    await mkdir(state)
+    const unsaved = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
+    assert.equal(unsaved.code, 1)
+    assert.equal(await readFile(file, 'utf8'), before)
+    await rm(state, { recursive: true })
+    await writeFile(state, savedState)
+
+    // An older CLI rewrites skill.json with only the fields it knows: the answer lives elsewhere and survives
+    await writeFile(join(config, 'giftsofprometheus', 'skill.json'), JSON.stringify({ base, file }))
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.reading, 'declined')
+
+    // Logout and login drop the answer: the next account is asked again
+    assert.equal((await cli(['logout'])).code, 0)
+    await writeFile(join(config, 'giftsofprometheus', 'credentials.json'), JSON.stringify({ base, token: 'secret' }), { mode: 0o600 })
+    assert.equal((await cli(['skill', 'personalize', '--file', file])).data.reading, 'unasked')
+    assert.equal((await cli(['skill', 'personalize', '--file', file, '--reading', 'decline'])).data.reading, 'declined')
+
+    // When nothing is left, the tail goes too
+    interests = []
+    inferredInterests = []
+    const gone = await cli(['skill', 'personalize', '--file', file])
+    assert.deepEqual(gone.data, { personalized: true, changed: true, path: file, topics: [], reading: 'declined' })
+    assert.equal(await tail(), undefined)
+    assert.deepEqual(requests.at(-1).body, { result: 'written', topics: 0, reading: 'declined', suggested: 0, added: 0, removed: 1 })
+    interests = questionnaire
+    inferredInterests = undefined
+
     const other = join(config, 'other.md')
     await writeFile(other, `---\nname: something-else\n${stock}\n---\n`)
     assert.equal((await cli(['skill', 'personalize', '--file', other])).code, 1, 'another skill is never touched')
@@ -179,7 +320,19 @@ test('react records what the user said, and personalize rewrites only the loaded
       assert.equal(blocked.data.personalized, false)
       assert.match(blocked.data.command, /skill personalize --file '.*SKILL\.md'$/)
       assert.equal(await readFile(file, 'utf8'), `---\nname: giftsofprometheus\n${stock}\n---\nBody\n`, 'a failed write leaves the file as it was')
-      assert.deepEqual(requests.at(-1), { path: '/api/knowledge/skill/personalize', method: 'POST', tail: '0', body: { result: 'write_failed', topics: 2 } })
+      assert.deepEqual(requests.at(-1), {
+        path: '/api/knowledge/skill/personalize',
+        method: 'POST',
+        tail: '0',
+        body: { result: 'write_failed', topics: 2, tail_source: 'explicit', reading: 'declined', suggested: 0 },
+      })
+
+      // An answer given with a copy that cannot be written is saved anyway, and the command for the user keeps it
+      await chmod(folder, 0o500)
+      const agreedBlocked = await cli(['skill', 'personalize', '--file', file, '--reading', 'agree'])
+      await chmod(folder, 0o700)
+      assert.match(agreedBlocked.data.command, /--file '.*SKILL[.]md' --reading agree$/)
+      assert.equal(JSON.parse(await readFile(join(config, 'giftsofprometheus', 'consent.json'), 'utf8')).reading, 'agreed')
     }
   } finally {
     server.closeAllConnections()

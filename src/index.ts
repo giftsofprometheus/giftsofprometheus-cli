@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailCount, tailTopics } from './skill-files.js'
+import { mergeSkill, newerVersion, personalDescription, skillDescription, skillHash, tailCount, tailTitle, tailTitles, tailTopics } from './skill-files.js'
 import * as text from './render.js'
 import { printable } from './render.js'
 
@@ -102,14 +102,16 @@ class ApiError extends Error {
     message: string,
     readonly status = 1,
     readonly code?: string,
-    readonly nextStep?: string
+    readonly nextStep?: string,
+    // What `share create` found that keeps an answer from being stored: the kind, the line and a cut excerpt
+    readonly findings?: Array<{ kind: string; excerpt: string; line: number }>
   ) {
     super(message)
   }
 }
 
 // A fresh 0600 file renamed into place: a secret never lands in an existing file with loose permissions or behind a symlink
-async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId | SkillState) {
+async function saveJson(file: string, value: Credentials | DeviceLogin | Draft | UpdateState | ClientId | SkillState | Consent) {
   await mkdir(directory, { recursive: true, mode: 0o700 })
   const info = await lstat(directory)
 
@@ -194,7 +196,17 @@ async function request(
     if (response.ok) return data
 
     const failure = z
-      .object({ error_description: z.string().optional(), error: z.string().optional(), code: z.string().optional(), nextStep: z.string().optional() })
+      .object({
+        error_description: z.string().optional(),
+        error: z.string().optional(),
+        code: z.string().optional(),
+        nextStep: z.string().optional(),
+      })
+      .safeParse(data)
+
+    // Read on their own: findings the CLI cannot read must not hide the error message and its code
+    const listed = z
+      .object({ findings: z.array(z.object({ kind: z.string().max(40), excerpt: z.string().max(40), line: z.number() })).max(20) })
       .safeParse(data)
 
     const code = failure.success ? failure.data.code : undefined
@@ -212,7 +224,11 @@ async function request(
     const message = failure.success ? failure.data.error_description || failure.data.error || `HTTP ${response.status}` : `HTTP ${response.status}`
     const nextStep = failure.success && failure.data.nextStep ? printable(failure.data.nextStep).slice(0, 500) : undefined
 
-    throw new ApiError(printable(message).slice(0, 500), response.status, code === undefined ? undefined : printable(code).slice(0, 100), nextStep)
+    const findings = listed.success
+      ? listed.data.findings.map(found => ({ kind: printable(found.kind), excerpt: printable(found.excerpt), line: found.line }))
+      : undefined
+
+    throw new ApiError(printable(message).slice(0, 500), response.status, code === undefined ? undefined : printable(code).slice(0, 100), nextStep, findings)
   }
 }
 
@@ -288,9 +304,16 @@ function run<Args extends unknown[]>(fn: (...args: Args) => Promise<unknown>, re
       const signIn = program.opts().json ? SIGN_IN_STEPS : `sign in with ${cmd()} login, then repeat this command`
       const nextStep = status === 401 ? signIn : e instanceof ApiError ? e.nextStep : undefined
 
-      if (program.opts().json) console.log(JSON.stringify({ error: { message, status, ...(code ? { code } : {}), ...(nextStep ? { nextStep } : {}) } }))
+      const findings = e instanceof ApiError ? e.findings : undefined
+
+      if (program.opts().json)
+        console.log(
+          JSON.stringify({ error: { message, status, ...(code ? { code } : {}), ...(nextStep ? { nextStep } : {}), ...(findings ? { findings } : {}) } })
+        )
       else {
         console.error(printable(message))
+
+        for (const found of findings ?? []) console.error(`  line ${found.line}: ${found.kind} ${found.excerpt}`)
 
         if (nextStep) console.error(`Next: ${printable(nextStep)}`)
       }
@@ -377,9 +400,17 @@ type SkillStatus = 'current' | 'outdated' | 'modified' | 'linked'
 // copy). The service counts in its analytics whether a personal tail is installed, never what it says
 const skillState = join(directory, 'skill.json')
 
-const skillStateSchema = z.object({ base: z.string(), file: z.string() })
+const skillStateSchema = z.object({ base: z.string(), file: z.string().optional() })
 
 type SkillState = z.infer<typeof skillStateSchema>
+
+// Whether the user agreed to topics inferred from their activity in the tail; no file until they answer. A file of its
+// own: an older CLI rewrites skill.json with only the fields it knows and would drop the answer
+const consentFile = join(directory, 'consent.json')
+
+const consentSchema = z.object({ base: z.string(), reading: z.enum(['agreed', 'declined']) })
+
+type Consent = z.infer<typeof consentSchema>
 
 // Only the frontmatter is needed, so a large or odd file never costs more than this
 const SKILL_HEAD_BYTES = 8192
@@ -415,7 +446,7 @@ async function copyTail(path: string): Promise<number | null> {
 /** Topics in the tail of the copies in the agent folders and the one personalize wrote (the most of any), or `none` */
 async function installedTail(): Promise<number | 'none'> {
   const state = await readState(skillState, skillStateSchema)
-  const paths = [...skillDirectories().map(folder => join(folder, 'SKILL.md')), ...(state ? [state.file] : [])]
+  const paths = [...skillDirectories().map(folder => join(folder, 'SKILL.md')), ...(state?.file ? [state.file] : [])]
   const real = new Set(await Promise.all(paths.map(path => realpath(path).catch(() => null))))
   const tails = (await Promise.all([...real].map(path => (path ? copyTail(path) : null)))).filter(tail => tail !== null)
 
@@ -443,10 +474,98 @@ function skillTailHeader(): Promise<string | null> {
 }
 
 /** After `skill personalize`: remember a copy it could write and tell the service what happened. Never fails or waits long */
-async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', topics: number) {
+type TailSource = 'explicit' | 'inferred' | 'mixed'
+
+type Reading = 'agreed' | 'declined'
+
+/** What a run tells the service besides its result: counts and the consent state, never the topics themselves */
+type PersonalizeReport = {
+  topics: number
+  source: TailSource | null
+  reading: Reading | 'unasked'
+  answer?: 'agree' | 'decline'
+  suggested: number
+  added: number
+  removed: number
+  unavailable: boolean
+}
+
+async function reportPersonalize(file: string, result: 'written' | 'unchanged' | 'write_failed', report: PersonalizeReport) {
   if (result !== 'write_failed') await saveJson(skillState, { base, file }).catch(() => {})
   skillTailValue = undefined
-  await request('/api/knowledge/skill/personalize', 'POST', { result, topics }, true, { timeoutMs: 2000, retry: false }).catch(() => {})
+
+  const body = {
+    result,
+    topics: report.topics,
+    ...(report.source ? { tail_source: report.source } : {}),
+    reading: report.reading,
+    ...(report.answer ? { answer: report.answer } : {}),
+    suggested: report.suggested,
+    // A tail that could not be written did not change
+    ...(result === 'write_failed' ? {} : { added: report.added, removed: report.removed }),
+    ...(report.unavailable ? { inferred_unavailable: true } : {}),
+  }
+
+  await request('/api/knowledge/skill/personalize', 'POST', body, true, { timeoutMs: 2000, retry: false }).catch(() => {})
+}
+
+/** Saves the user's answer about topics from their reading; a failure is an error, so a lost answer is never reported as kept */
+async function saveReading(answer: Reading) {
+  try {
+    await saveJson(consentFile, { base, reading: answer })
+  } catch (e) {
+    throw new ApiError(`Could not save the answer in ${consentFile}: ${e instanceof Error ? e.message : 'write failed'}`)
+  }
+}
+
+async function savedReading(): Promise<Reading | undefined> {
+  return (await readState(consentFile, consentSchema))?.reading
+}
+
+/** A new account starts unasked: the answer of the previous one is dropped on login and logout */
+async function forgetReading() {
+  await unlink(consentFile).catch(() => {})
+}
+
+const skillLock = join(directory, 'skill.lock')
+
+// A lock older than this belongs to a run that died; personalize itself takes a few seconds at most
+const SKILL_LOCK_STALE_MS = 30_000
+
+const SKILL_LOCK_WAIT_MS = 10_000
+
+/** One personalize at a time on this machine: the answer and the tail are read and written inside, so a late run never undoes a newer answer */
+async function withSkillLock<T>(work: () => Promise<T>): Promise<T> {
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  const deadline = Date.now() + SKILL_LOCK_WAIT_MS
+
+  for (;;) {
+    try {
+      await (await open(skillLock, 'wx', 0o600)).close()
+      break
+    } catch (e) {
+      if (!(e instanceof Error && 'code' in e && e.code === 'EEXIST')) throw e
+
+      const age = await stat(skillLock).then(
+        info => Date.now() - info.mtimeMs,
+        () => SKILL_LOCK_STALE_MS + 1
+      )
+
+      if (age > SKILL_LOCK_STALE_MS) {
+        await unlink(skillLock).catch(() => {})
+        continue
+      }
+
+      if (Date.now() > deadline) throw new ApiError('Another skill personalize is running; try again in a few seconds')
+      await sleep(100)
+    }
+  }
+
+  try {
+    return await work()
+  } finally {
+    await unlink(skillLock).catch(() => {})
+  }
 }
 
 // Where agents and `npx skills add` keep personal and project skills
@@ -663,6 +782,7 @@ async function waitLogin(device: DeviceLogin) {
 
       await saveJson(credentials, { base, token: token.access_token })
       await unlink(pendingLogin).catch(() => {})
+      await forgetReading()
 
       return { signedIn: true, expiresIn: token.expires_in }
     } catch (e) {
@@ -762,6 +882,7 @@ program
         }
 
         await unlink(credentials).catch(() => {})
+        await forgetReading()
 
         return { signedOut: true }
       },
@@ -1072,7 +1193,7 @@ const profile = program.command('profile').description('Read or update interests
 
 profile
   .command('get')
-  .description('Show interests and the current task')
+  .description('Show interests, topics inferred from reading and the current task')
   .action(run(() => request('/api/knowledge/profile'), view(text.profileSchema, text.profile)))
 
 const levels = z.enum(['high', 'interested', 'not_interested'])
@@ -1292,6 +1413,163 @@ program
     )
   )
 
+// ── share: an answer of the agent as a page /shared/<id> on the site ──
+
+const SHARES = '/api/account/shared-answers'
+
+const shareId = (id: string) => {
+  if (!/^[1-9A-HJ-NP-Za-km-z]{12}$/.test(id)) throw new ApiError('A page id is 12 characters from its address /shared/<id>; see share list')
+
+  return id
+}
+
+/** The Markdown of an answer: a file, or `-` for stdin. Read as text, at most 5 MB like the service limit */
+async function answerMarkdown(file: string) {
+  const markdown = file === '-' ? await readStdin() : await readFile(resolve(file), 'utf8')
+
+  if (Buffer.byteLength(markdown, 'utf8') > 5 * 1024 * 1024) throw new ApiError('The answer is larger than 5 MB')
+
+  if (!markdown.trim()) throw new ApiError('The answer file is empty')
+
+  return markdown
+}
+
+async function readStdin() {
+  const chunks: Buffer[] = []
+
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
+
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/** The agent that runs the CLI, from the variables these agents set; only a label on the page record */
+const detectedAgent = () =>
+  process.env.CLAUDECODE
+    ? 'claude-code'
+    : process.env.CODEX_SANDBOX || process.env.CODEX_THREAD_ID
+      ? 'codex'
+      : process.env.CURSOR_TRACE_ID
+        ? 'cursor'
+        : undefined
+
+type AccessOptions = { visibility?: string; password?: string; confirmPublic?: boolean }
+
+function accessBody(options: AccessOptions) {
+  if (options.visibility && !['unlisted', 'password', 'public'].includes(options.visibility)) throw new ApiError('Access is one of: unlisted, password, public')
+  // A password alone means the password mode; with another mode the service refuses it
+  // An empty --password (an unset variable) is sent as is, so the service refuses it instead of publishing without one
+  const visibility = options.visibility ?? (options.password !== undefined ? 'password' : undefined)
+
+  return {
+    ...(visibility ? { visibility } : {}),
+    ...(options.password !== undefined ? { password: options.password } : {}),
+    ...(options.confirmPublic ? { confirmPublic: true } : {}),
+  }
+}
+
+const shareView = view(text.shareSchema, text.share)
+
+const share = program.command('share').description('Publish an answer as a page on the site: create a private draft, let the user check it, then publish')
+
+share
+  .command('create')
+  .description('Upload an answer as a private draft; prints the preview link that only the signed-in user can open')
+  .requiredOption('--title <title>', 'page title, up to 200 characters')
+  .requiredOption('--question <question>', "the user's question, up to 4000 characters")
+  .requiredOption('--file <path>', 'the answer in Markdown, or - for stdin')
+  .action(
+    run(async (options: { title: string; question: string; file: string }) => {
+      // Never repeated: a repeat after a lost answer would leave a second draft
+      const result = await request(
+        SHARES,
+        'POST',
+        { title: options.title, question: options.question, markdown: await answerMarkdown(options.file), sourceAgent: detectedAgent(), cliVersion: version },
+        true,
+        { timeoutMs: 60_000, retry: false }
+      )
+
+      hint(
+        'Give the user previewUrl to check the draft. Publish only after the user agrees: share publish <id>',
+        'Check the draft at the link above, then publish it with: share publish <id>'
+      )
+
+      return result
+    }, shareView)
+  )
+
+share
+  .command('publish')
+  .description('Publish a draft: by default anyone with the link can open it, not search engines')
+  .argument('<id>')
+  .option('--visibility <mode>', 'unlisted (default), password or public')
+  .option('--password <password>', 'at least 8 characters, chosen by the user; implies --visibility password')
+  .option('--confirm-public', 'for --visibility public: the user agreed that search engines index the page')
+  .action(run((id: string, options: AccessOptions) => request(`${SHARES}/${shareId(id)}/publish`, 'POST', accessBody(options)), shareView))
+
+share
+  .command('list')
+  .description("The user's drafts and published pages")
+  .action(
+    run(
+      () => request(SHARES),
+      view(text.shareListSchema, value => text.shareList(value, `No pages yet. Upload an answer with: ${cmd()} share create`))
+    )
+  )
+
+share
+  .command('get')
+  .description('One page with its Markdown, for an update')
+  .argument('<id>')
+  .action(run((id: string) => request(`${SHARES}/${shareId(id)}`), view(text.sharePageSchema, text.sharePage)))
+
+share
+  .command('update')
+  .description('Replace the content of a page; the address stays, no history is kept')
+  .argument('<id>')
+  .option('--title <title>', 'new title')
+  .option('--question <question>', 'new question')
+  .option('--file <path>', 'new answer in Markdown, or - for stdin')
+  .action(
+    run(async (id: string, options: { title?: string; question?: string; file?: string }) => {
+      // An empty value is sent too: the service refuses it rather than the CLI dropping it silently
+      const body = {
+        ...(options.title !== undefined ? { title: options.title } : {}),
+        ...(options.question !== undefined ? { question: options.question } : {}),
+        ...(options.file !== undefined ? { markdown: await answerMarkdown(options.file) } : {}),
+      }
+
+      if (!Object.keys(body).length) throw new ApiError('Pass --title, --question or --file')
+
+      return request(`${SHARES}/${shareId(id)}`, 'PATCH', body, true, { timeoutMs: 60_000 })
+    }, shareView)
+  )
+
+share
+  .command('visibility')
+  .description('Change who can open a page: unlisted, password or public')
+  .argument('<id>')
+  .argument('<mode>', 'unlisted, password or public')
+  .option('--password <password>', 'a new password: at least 8 characters, chosen by the user')
+  .option('--confirm-public', 'for public: the user agreed that search engines index the page')
+  .action(
+    run(
+      (id: string, mode: string, options: AccessOptions) =>
+        request(`${SHARES}/${shareId(id)}/visibility`, 'PATCH', accessBody({ ...options, visibility: mode })),
+      shareView
+    )
+  )
+
+share
+  .command('delete')
+  .description('Delete a page: its address then answers that the author removed it')
+  .argument('<id>')
+  .action(
+    run(
+      (id: string) => request(`${SHARES}/${shareId(id)}`, 'DELETE'),
+      (_, id: string) => `Deleted ${printable(id)}.`
+    )
+  )
+
 program
   .command('request')
   .description('Make an authenticated GET request to a Knowledge API path, e.g. /api/knowledge/profile')
@@ -1319,15 +1597,19 @@ skill
 
 const profileTopics = z.object({
   interests: z.array(z.object({ topic: z.string().optional(), level: z.enum(['high', 'interested', 'not_interested']) })),
+  // A service before inferred interests sends none
+  inferredInterests: z.array(z.object({ topic: z.string(), score: z.number() })).default([]),
+  // The service could not compute them this time: the list is empty, but it does not mean «no topics»
+  inferredUnavailable: z.literal(true).optional(),
   topics: z.array(z.object({ slug: z.string(), title: z.string(), section: z.string().nullable() })),
 })
 
-/** Titles of the user's topics for the skill tail: strong interests first, subtopics before whole sections */
-async function personalTopics(): Promise<string[]> {
+/** Titles of the user's questionnaire topics, strong interests first, subtopics before whole sections, and of their inferred topics, strongest first */
+async function personalTopics(): Promise<{ explicit: string[]; inferred: string[]; unavailable: boolean }> {
   const profile = profileTopics.parse(await request('/api/knowledge/profile'))
   const bySlug = new Map(profile.topics.map(t => [t.slug, t]))
 
-  return profile.interests
+  const explicit = profile.interests
     .flatMap(i => {
       const topic = i.topic === undefined ? undefined : bySlug.get(i.topic)
 
@@ -1335,6 +1617,37 @@ async function personalTopics(): Promise<string[]> {
     })
     .sort((a, b) => a.order - b.order)
     .map(t => t.title)
+
+  const named = new Set(explicit.map(tailTitle))
+
+  const inferred = [...profile.inferredInterests]
+    .sort((a, b) => b.score - a.score)
+    .flatMap(i => bySlug.get(i.topic)?.title ?? [])
+    .filter(title => !named.has(tailTitle(title)))
+
+  return { explicit, inferred, unavailable: profile.inferredUnavailable === true }
+}
+
+/**
+ * The tail: questionnaire topics, then the strongest inferred topics that fit. Among the inferred topics that fit, those
+ * already in the tail keep their order, so a small change of weights does not rewrite the file; a topic that no longer
+ * ranks among the ones that fit gives its place up.
+ */
+function tailWithReading(explicit: string[], inferred: string[], current: string[]): string[] {
+  const fit = new Set(tailTopics([...explicit, ...inferred]))
+  const chosen = inferred.filter(title => fit.has(tailTitle(title)))
+  const kept = (title: string) => current.indexOf(tailTitle(title))
+  const ordered = [...chosen.filter(t => kept(t) >= 0).sort((a, b) => kept(a) - kept(b)), ...chosen.filter(t => kept(t) < 0)]
+
+  return tailTopics([...explicit, ...ordered])
+}
+
+function tailSource(topics: string[], explicit: string[]): TailSource | null {
+  if (!topics.length) return null
+  const named = new Set(explicit.map(tailTitle))
+  const fromReading = topics.filter(t => !named.has(t)).length
+
+  return fromReading === 0 ? 'explicit' : fromReading === topics.length ? 'inferred' : 'mixed'
 }
 
 // A command the user can paste into their own terminal, where the file may be writable
@@ -1344,8 +1657,17 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
  * Adds the user's topics to the description of the skill copy the agent loaded, so the agent reaches for it on them too.
  * Only a SKILL.md of this skill is changed; a copy that cannot be written is reported with a command for the user.
  */
-async function personalizeSkill(o: { file: string }) {
-  const given = resolve(o.file)
+async function personalizeSkill(o: { file: string; reading?: string }) {
+  if (o.reading !== undefined && o.reading !== 'agree' && o.reading !== 'decline') throw new ApiError('--reading takes agree or decline')
+  const answer: Reading | undefined = o.reading === 'agree' ? 'agreed' : o.reading === 'decline' ? 'declined' : undefined
+
+  return withSkillLock(() => personalizeLocked(o.file, answer))
+}
+
+async function personalizeLocked(path: string, answer: Reading | undefined) {
+  // The answer is kept first, before the network and the file: a run that fails later still remembers it
+  if (answer) await saveReading(answer)
+  const given = resolve(path)
   const file = basename(given) === 'SKILL.md' ? given : join(given, 'SKILL.md')
   let text: string
 
@@ -1359,13 +1681,36 @@ async function personalizeSkill(o: { file: string }) {
   const line = skillDescription(text)
 
   if (!line) throw new ApiError(`${file} has no description line`)
-  const topics = tailTopics(await personalTopics())
+
+  const reading = answer ?? (await savedReading())
+  const { explicit, inferred, unavailable } = await personalTopics()
+  const current = tailTitles(line)
+  const named = new Set(explicit.map(tailTitle))
+  // When the service could not compute the topics, the ones from reading already in the tail stay as they are
+  const fromReading = unavailable ? current.filter(title => !named.has(title)) : inferred
+  const withReading = tailWithReading(explicit, fromReading, current)
+  // Topics from reading go in only after the user agreed; until they answer, the output names what would be added
+  const topics = reading === 'agreed' ? withReading : tailTopics(explicit)
+  const suggested = reading ? [] : withReading.filter(t => !topics.includes(t))
+  const source = tailSource(topics, explicit)
   const next = personalDescription(line, topics)
+  const extra = { ...(source ? { source } : {}), reading: reading ?? 'unasked', ...(suggested.length ? { suggested } : {}) }
+
+  const report: PersonalizeReport = {
+    topics: topics.length,
+    source,
+    reading: reading ?? 'unasked',
+    ...(answer ? { answer: answer === 'agreed' ? ('agree' as const) : ('decline' as const) } : {}),
+    suggested: suggested.length,
+    added: topics.filter(t => !current.includes(t)).length,
+    removed: current.filter(t => !topics.includes(t)).length,
+    unavailable,
+  }
 
   if (next === line) {
-    await reportPersonalize(file, 'unchanged', topics.length)
+    await reportPersonalize(file, 'unchanged', report)
 
-    return { personalized: true, changed: false, path: file, topics }
+    return { personalized: true, changed: false, path: file, topics, ...extra }
   }
 
   const temporary = `${file}.${randomUUID()}.tmp`
@@ -1379,26 +1724,31 @@ async function personalizeSkill(o: { file: string }) {
     await rename(temporary, file)
   } catch (e) {
     await unlink(temporary).catch(() => {})
-    await reportPersonalize(file, 'write_failed', topics.length)
+    await reportPersonalize(file, 'write_failed', report)
 
     return {
       personalized: false,
       path: file,
       topics,
+      ...extra,
       reason: e instanceof Error ? e.message : 'Write failed',
-      command: `${cmd()} skill personalize --file ${shellQuote(file)}`,
+      // The answer is already saved, but the flag keeps the command the same as the one the user agreed to
+      command: `${cmd()} skill personalize --file ${shellQuote(file)}${answer ? ` --reading ${answer === 'agreed' ? 'agree' : 'decline'}` : ''}`,
     }
   }
 
-  await reportPersonalize(file, 'written', topics.length)
+  await reportPersonalize(file, 'written', report)
 
-  return { personalized: true, changed: true, path: file, topics }
+  return { personalized: true, changed: true, path: file, topics, ...extra }
 }
 
 skill
   .command('personalize')
-  .description("Add the user's topics (ten words at most) to the description of the skill copy at --file; requires login")
+  .description(
+    "Add the user's topics (ten words at most) to the description of the skill copy at --file: their interests, then topics from their reading once they agreed; requires login"
+  )
   .requiredOption('--file <path>', 'SKILL.md of the loaded skill, or its folder')
+  .option('--reading <answer>', 'agree or decline: whether topics from their reading go into the tail; remembered on this machine')
   .action(run(personalizeSkill, view(text.personalizeSchema, text.personalize)))
 
 // The daily check runs after the command, so it never delays or breaks its output; doctor and skill report the same state themselves

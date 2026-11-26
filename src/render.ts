@@ -5,6 +5,10 @@ import { z } from 'zod'
 // oxlint-disable-next-line no-control-regex -- matching control characters is the purpose of this function
 export const printable = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
 
+/** Multi-line text such as Markdown: line breaks and tabs stay, other control characters go */
+// oxlint-disable-next-line no-control-regex -- control characters are what this removes, keeping only the line break and the tab
+export const printableLines = (value: string) => value.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+
 /** Like printable, but keeps line breaks: talk summaries are Markdown paragraphs and lists */
 const clean = (value: string) =>
   value
@@ -219,9 +223,12 @@ export function topicTree(value: z.infer<typeof topicsSchema>) {
 
 export const profileSchema = z.object({
   interests: z.array(z.object({ topic: z.string().optional(), level: z.enum(['high', 'interested', 'not_interested']) })),
+  inferredInterests: z.array(z.object({ topic: z.string(), basis: z.object({ talks: z.number(), episodes: z.number() }) })).default([]),
   queryText: z.string(),
   topics: z.array(topicSchema).default([]),
 })
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
 const levelNames = { high: 'Very interested', interested: 'Interested', not_interested: 'Not interested' } as const
 
@@ -236,6 +243,18 @@ export function profile(value: z.infer<typeof profileSchema>) {
   }
 
   if (!value.interests.length) lines.push('', dim('No interests yet. Set them with: profile update --interest <topic>=interested'))
+
+  if (value.inferredInterests.length) {
+    lines.push(
+      '',
+      bold('From your activity (not saved):'),
+      ...value.inferredInterests.map(i => {
+        const basis = i.basis.talks ? plural(i.basis.talks, 'talk') : plural(i.basis.episodes, 'search session')
+
+        return `  ${printable(titles.get(i.topic) ?? i.topic)} ${dim(`— ${basis}`)}`
+      })
+    )
+  }
 
   return lines.join('\n')
 }
@@ -364,13 +383,99 @@ export const personalizeSchema = z.object({
   changed: z.boolean().optional(),
   path: z.string(),
   topics: z.array(z.string()),
+  source: z.enum(['explicit', 'inferred', 'mixed']).optional(),
+  reading: z.enum(['agreed', 'declined', 'unasked']).optional(),
+  suggested: z.array(z.string()).optional(),
   reason: z.string().optional(),
   command: z.string().optional(),
 })
 
 export function personalize(value: z.infer<typeof personalizeSchema>) {
   if (!value.personalized) return `Could not write ${value.path}: ${printable(value.reason ?? '')}\nRun in your terminal: ${value.command ?? ''}`
-  const topics = value.topics.length ? value.topics.map(printable).join(', ') : 'no topics yet'
+  const topics = value.topics.map(printable).join(', ')
+  const from = value.source === 'inferred' ? ' (from your activity)' : value.source === 'mixed' ? ' (from your interests and activity)' : ''
 
-  return value.changed ? `Added your topics to ${value.path}: ${topics}` : `${value.path} already lists your topics: ${topics}`
+  const result = !value.topics.length
+    ? value.changed
+      ? `Removed the personal topics from ${value.path}`
+      : `No topics for ${value.path} yet`
+    : value.changed
+      ? `Added your topics${from} to ${value.path}: ${topics}`
+      : `${value.path} already lists your topics${from}: ${topics}`
+
+  const offer = value.suggested?.length
+    ? `\nFrom your activity it would also add: ${value.suggested.map(printable).join(', ')}. Add them with --reading agree, or keep them out with --reading decline.`
+    : ''
+
+  return result + offer
+}
+
+const shareWarningSchema = z.object({ kind: z.string(), excerpt: z.string() })
+
+export const shareSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  status: z.string(),
+  visibility: z.string(),
+  hasPassword: z.boolean(),
+  title: z.string(),
+  talks: z.number(),
+  warnings: z.array(shareWarningSchema),
+  updatedAt: z.string(),
+  expiresAt: z.string().optional(),
+})
+
+export const shareListSchema = z.object({ items: z.array(shareSchema) })
+
+const WARNING_KINDS = new Map([
+  ['email', 'email'],
+  ['internal_host', 'internal host'],
+  ['local_path', 'local path'],
+  ['token', 'possible token'],
+  ['unknown_talk', 'talk not in the catalog'],
+  ['show_me_removed', 'removed from show-me'],
+])
+
+const ACCESS = new Map([
+  ['unlisted', 'anyone with the link'],
+  ['password', 'link and password'],
+  ['public', 'public, indexed by search engines'],
+])
+
+/** One shared answer: where it is, who can open it and what the upload check found */
+export function share(value: z.infer<typeof shareSchema>) {
+  const lines = [
+    `${bold(printable(value.title))}`,
+    `${value.status === 'draft' ? 'Draft (only you can open it)' : `Published, ${ACCESS.get(value.visibility) ?? printable(value.visibility)}`}: ${printable(value.url)}`,
+  ]
+
+  if (value.expiresAt) lines.push(dim(`Deleted on ${value.expiresAt.slice(0, 10)} unless published`))
+
+  if (value.talks) lines.push(dim(`Cites ${value.talks} catalog talk${value.talks === 1 ? '' : 's'}`))
+
+  if (value.warnings.length) {
+    lines.push('', value.status === 'draft' ? 'Check before publishing:' : 'The upload check found:')
+
+    for (const warning of value.warnings) lines.push(`  ${WARNING_KINDS.get(warning.kind) ?? printable(warning.kind)}: ${printable(warning.excerpt)}`)
+  }
+
+  return lines.join('\n')
+}
+
+export const sharePageSchema = shareSchema.extend({ question: z.string(), markdown: z.string() })
+
+/** One page with its question and Markdown, as `share update` takes them back */
+export function sharePage(value: z.infer<typeof sharePageSchema>) {
+  return [share(value), '', `${bold('Question:')} ${printable(value.question)}`, '', printableLines(value.markdown)].join('\n')
+}
+
+export function shareList(value: z.infer<typeof shareListSchema>, empty: string) {
+  if (!value.items.length) return empty
+
+  return value.items
+    .map(
+      item =>
+        `${bold(printable(item.title))}\n  ${item.status === 'draft' ? 'draft' : printable(item.visibility)} · ${printable(item.url)} · ${item.updatedAt.slice(0, 10)}`
+    )
+    .join('\n')
 }

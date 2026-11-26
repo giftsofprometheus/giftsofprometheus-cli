@@ -61,16 +61,21 @@ const TAIL = / Also good for [^\n]*$/
 
 const TAIL_WORDS = 10
 
-/** Topic titles that fit the tail, in the given order; characters YAML or the line could trip on are dropped */
+/** A topic title as the tail writes it: characters YAML or the line could trip on are dropped */
+export function tailTitle(raw: string): string {
+  return raw
+    .replace(/[:#"'`\n\r;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Topic titles that fit the tail, in the given order */
 export function tailTopics(titles: string[]): string[] {
   const chosen: string[] = []
   let words = TAIL_PREFIX.trim().split(/\s+/).length
 
   for (const raw of titles) {
-    const title = raw
-      .replace(/[:#"'`\n\r;]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const title = tailTitle(raw)
 
     const count = title ? title.split(' ').length : 0
 
@@ -98,9 +103,17 @@ export function personalTail(line: string): string {
   return line.match(TAIL)?.[0] ?? ''
 }
 
-/** Topics in the personal tail of a description line, 0 without one */
-export function tailCount(line: string): number {
+/** Topic titles in the personal tail of a description line, in order; empty without a tail */
+export function tailTitles(line: string): string[] {
   const tail = personalTail(line).slice(TAIL_PREFIX.length).replace(/\.$/, '').trim()
 
-  return tail.split(/;\s*/).filter(topic => topic.trim()).length
+  return tail
+    .split(/;\s*/)
+    .map(topic => topic.trim())
+    .filter(Boolean)
+}
+
+/** Topics in the personal tail of a description line, 0 without one */
+export function tailCount(line: string): number {
+  return tailTitles(line).length
 }
